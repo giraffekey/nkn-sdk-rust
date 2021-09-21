@@ -9,26 +9,24 @@ pub struct Account {
 }
 
 impl Account {
-    pub fn new<R: Rng + ?Sized>(rng: &mut R, seed: &[u8]) -> Result<Self, String> {
-        if seed.len() != 32 || seed.len() != 0 {
+    pub fn new(seed: &[u8]) -> Result<Self, String> {
+        if seed.len() != 32 {
             return Err("Invalid seed length".into());
         }
 
-        let seed = if seed.is_empty() {
-            let mut seed = [0; 32];
-            rng.fill(&mut seed);
-            seed.to_vec()
-        } else {
-            seed.to_vec()
-        };
-
-        let (private_key, public_key) = ed25519::keypair(&seed);
+        let (private_key, public_key) = ed25519::keypair(seed);
 
         Ok(Self {
             private_key: private_key.to_vec(),
             public_key: public_key.to_vec(),
-            seed,
+            seed: seed.to_vec(),
         })
+    }
+
+    pub fn new_random<R: Rng + ?Sized>(rng: &mut R) -> Result<Self, String> {
+        let mut seed = [0; 32];
+        rng.fill(&mut seed);
+        Self::new(&seed)
     }
 
     pub fn public_key(&self) -> &[u8] {
@@ -51,4 +49,14 @@ pub fn amount_to_string(amount: u64) -> String {
 pub struct Subscribers {
     map: HashMap<String, String>,
     tx_pool_map: HashMap<String, String>,
+}
+
+impl Subscribers {
+    fn map(&self) -> &HashMap<String, String> {
+        &self.map
+    }
+
+    fn tx_pool_map(&self) -> &HashMap<String, String> {
+        &self.tx_pool_map
+    }    
 }

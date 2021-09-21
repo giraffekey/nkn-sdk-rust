@@ -4,8 +4,6 @@ use crate::{
     Transaction, TransactionConfig, Wallet, WalletConfig,
 };
 
-use std::time::Duration;
-
 pub struct ClientConfig {
     pub rpc_server_address: Vec<String>,
     pub rpc_timeout: u32,
@@ -50,7 +48,7 @@ pub struct Client<'a> {
 impl<'a> Client<'a> {
     pub fn new(account: &'a Account, identifier: Option<String>, config: ClientConfig) -> Self {
         let wallet_config = WalletConfig {
-            rpc_server_address: config.rpc_server_address,
+            rpc_server_address: config.rpc_server_address.clone(),
             ..WalletConfig::default()
         };
         let wallet = Wallet::new(account, wallet_config);
@@ -105,10 +103,6 @@ impl<'a> Client<'a> {
     }
 
     pub fn close(&self) {
-        todo!()
-    }
-
-    pub fn delete_name(&self, name: &str, config: TransactionConfig) -> String {
         todo!()
     }
 
@@ -168,12 +162,16 @@ impl<'a> Client<'a> {
         todo!()
     }
 
-    pub fn publish_binary(&self, topic: &str, data: &[u8], config: MessageConfig) {
+    pub fn publish(&self, topic: &str, data: impl Into<Vec<u8>>, config: MessageConfig) {
         todo!()
     }
 
+    pub fn publish_binary(&self, topic: &str, data: &[u8], config: MessageConfig) {
+        self.publish(topic, data, config)
+    }
+
     pub fn publish_text(&self, topic: &str, data: &str, config: MessageConfig) {
-        todo!()
+        self.publish(topic, data, config)
     }
 
     pub fn reconnect(&self) {
@@ -184,12 +182,20 @@ impl<'a> Client<'a> {
         todo!()
     }
 
-    pub fn send_binary(&self, dests: &[&str], data: &[u8], config: MessageConfig) {
+    pub fn delete_name(&self, name: &str, config: TransactionConfig) -> String {
         todo!()
     }
 
-    pub fn send_text(&self, dests: &[&str], data: &str, config: MessageConfig) {
+    pub fn send(&self, dests: &[&str], data: impl Into<Vec<u8>>, config: MessageConfig) {
         todo!()
+    }
+
+    pub fn send_binary(&self, dests: &[&str], data: &[u8], config: MessageConfig) {
+        self.send(dests, data, config)
+    }
+
+    pub fn send_text(&self, dests: &[&str], data: &str, config: MessageConfig) {
+        self.send(dests, data, config)
     }
 
     pub fn send_raw_transaction(&self, txn: Transaction) -> String {
@@ -207,7 +213,7 @@ impl<'a> Client<'a> {
     pub fn subscribe(
         identifier: &str,
         topic: &str,
-        duration: Duration,
+        duration: u32,
         meta: &str,
         config: TransactionConfig,
     ) -> String {
