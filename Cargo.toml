@@ -1,0 +1,7 @@
+[package]
+name = "nkn-sdk-rust"
+version = "0.1.0"
+authors = ["NKN"]
+edition = "2018"
+
+[dependencies]
