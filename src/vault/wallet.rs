@@ -1,4 +1,7 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
+use crate::crypto::ScryptConfig;
+use crate::vault::account::AccountHolder;
+use crate::vault::data::WalletData;
 use crate::{
     Account, NanoPay, NanoPayClaimer, RPCClient, Registrant, SignerRPCClient, Subscribers,
     Subscription, Transaction, TransactionConfig,
@@ -9,8 +12,9 @@ pub struct WalletConfig {
     pub rpc_timeout: u32,
     pub rpc_concurrency: u32,
     pub password: String,
-    pub iv: Vec<u8>,
     pub master_key: Vec<u8>,
+    pub iv: Vec<u8>,
+    pub scrypt_config: ScryptConfig,
 }
 
 impl Default for WalletConfig {
@@ -22,18 +26,26 @@ impl Default for WalletConfig {
             password: String::new(),
             iv: Vec::new(),
             master_key: Vec::new(),
+            scrypt_config: ScryptConfig::default(),
         }
     }
 }
 
 pub struct Wallet<'a> {
-    account: &'a Account,
     config: WalletConfig,
+    account: &'a Account,
+    wallet_data: WalletData,
 }
 
 impl<'a> Wallet<'a> {
     pub fn new(account: &'a Account, config: WalletConfig) -> Self {
-        Self { account, config }
+        let wallet_data = WalletData::new(account, &config.password, &config.master_key, &config.iv, config.scrypt_config.clone());
+
+        Self {
+            config,
+            account,
+            wallet_data,
+        }
     }
 
     pub fn from_json(json: &str, config: WalletConfig) -> Self {
@@ -52,18 +64,6 @@ impl<'a> Wallet<'a> {
         self.config = config
     }
 
-    pub fn account(&self) -> &Account {
-        self.account
-    }
-
-    pub fn address(&self) -> &str {
-        todo!()
-    }
-
-    pub fn program_hash(&self) -> &[u8] {
-        self.account.program_hash()
-    }
-
     pub fn verify_password(password: &str) -> bool {
         todo!()
     }
@@ -79,6 +79,32 @@ impl<'a> Wallet<'a> {
         min_flush_amount: u64,
     ) -> NanoPayClaimer {
         todo!()
+    }
+}
+
+impl AccountHolder for Wallet<'_> {
+    fn account(&self) -> &Account {
+        self.account
+    }
+
+    fn public_key(&self) -> &[u8] {
+        self.account.public_key()
+    }
+
+    fn private_key(&self) -> &[u8] {
+        self.account.private_key()
+    }
+
+    fn seed(&self) -> &[u8] {
+        self.account.seed()
+    }
+
+    fn address(&self) -> String {
+        self.account.wallet_address()
+    }
+
+    fn program_hash(&self) -> &[u8] {
+        self.account.program_hash()
     }
 }
 

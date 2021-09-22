@@ -1,5 +1,8 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
+use crate::crypto::ed25519_private_key_to_curve25519_private_key;
 use crate::rpc::RPCClient;
+use crate::vault::account::AccountHolder;
+
 use crate::{
     get_balance, Account, MessageConfig, NanoPay, NanoPayClaimer, Node, RPCConfig, Registrant,
     SignerRPCClient, Subscribers, Subscription, Transaction, TransactionConfig, Wallet,
@@ -41,10 +44,11 @@ impl Default for ClientConfig {
 }
 
 pub struct Client<'a> {
-    account: &'a Account,
-    identifier: Option<String>,
     config: ClientConfig,
+    account: &'a Account,
     wallet: Wallet<'a>,
+    identifier: Option<String>,
+    curve_secret_key: Vec<u8>,
 }
 
 impl<'a> Client<'a> {
@@ -54,12 +58,14 @@ impl<'a> Client<'a> {
             ..WalletConfig::default()
         };
         let wallet = Wallet::new(account, wallet_config);
+        let curve_secret_key = ed25519_private_key_to_curve25519_private_key(account.private_key());
 
         Self {
-            account,
-            identifier,
             config,
+            account,
             wallet,
+            identifier,
+            curve_secret_key,
         }
     }
 
@@ -69,31 +75,6 @@ impl<'a> Client<'a> {
 
     pub fn set_config(&mut self, config: ClientConfig) {
         self.config = config
-    }
-
-    pub fn account(&self) -> &Account {
-        self.account
-    }
-
-    pub fn public_key(&self) -> &[u8] {
-        self.account.public_key()
-    }
-
-    pub fn seed(&self) -> &[u8] {
-        self.account.seed()
-    }
-
-    pub fn address(&self) -> String {
-        let pub_key_hex = hex::encode(self.public_key());
-        if let Some(identifier) = &self.identifier {
-            if !identifier.is_empty() {
-                format!("{:?}.{:?}", identifier, pub_key_hex)
-            } else {
-                pub_key_hex
-            }
-        } else {
-            pub_key_hex
-        }
     }
 
     pub fn close(&self) {
@@ -109,19 +90,6 @@ impl<'a> Client<'a> {
     }
 
     pub fn node(&self) -> Node {
-        todo!()
-    }
-
-    pub fn create_nano_pay(&self, recipient_address: &str, fee: &str, duration: u32) -> NanoPay {
-        todo!()
-    }
-
-    pub fn create_nano_pay_claimer(
-        &self,
-        recipient_address: &str,
-        claim_interval_ms: u32,
-        min_flush_amount: u64,
-    ) -> NanoPayClaimer {
         todo!()
     }
 
@@ -152,6 +120,54 @@ impl<'a> Client<'a> {
     pub fn set_write_deadline(&self, deadline: u64) {
         todo!()
     }
+
+    pub fn create_nano_pay(&self, recipient_address: &str, fee: &str, duration: u32) -> NanoPay {
+        todo!()
+    }
+
+    pub fn create_nano_pay_claimer(
+        &self,
+        recipient_address: &str,
+        claim_interval_ms: u32,
+        min_flush_amount: u64,
+    ) -> NanoPayClaimer {
+        todo!()
+    }
+}
+
+impl AccountHolder for Client<'_> {
+    fn account(&self) -> &Account {
+        self.account
+    }
+
+    fn public_key(&self) -> &[u8] {
+        self.account.public_key()
+    }
+
+    fn private_key(&self) -> &[u8] {
+        self.account.private_key()
+    }
+
+    fn seed(&self) -> &[u8] {
+        self.account.seed()
+    }
+
+    fn address(&self) -> String {
+        let pub_key_hex = hex::encode(self.public_key());
+        if let Some(identifier) = &self.identifier {
+            if !identifier.is_empty() {
+                format!("{:?}.{:?}", identifier, pub_key_hex)
+            } else {
+                pub_key_hex
+            }
+        } else {
+            pub_key_hex
+        }
+    }
+
+    fn program_hash(&self) -> &[u8] {
+        self.account.program_hash()
+    }
 }
 
 impl RPCClient for Client<'_> {
@@ -164,7 +180,7 @@ impl RPCClient for Client<'_> {
     }
 
     fn balance(&self) -> u64 {
-        self.balance_by_address(self.wallet.address())
+        self.balance_by_address(&self.wallet.address())
     }
 
     fn balance_by_address(&self, address: &str) -> u64 {

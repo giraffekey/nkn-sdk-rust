@@ -1,8 +1,8 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
-use crate::{Client, MultiClient, Subscribers, Transaction, TransactionConfig, Wallet};
+use crate::{Subscribers, Transaction, TransactionConfig};
 
 use serde::{de::DeserializeOwned, Serialize};
-use serde_json::{json, Value as JsonValue};
+use serde_json::json;
 
 pub trait RPCClient {
     fn nonce(&self, tx_pool: bool) -> u64;
@@ -123,4 +123,8 @@ pub fn rpc_call<S: Serialize, D: DeserializeOwned>(
 
 pub fn get_balance(address: &str, config: RPCConfig) -> u64 {
     rpc_call("getbalancebyaddr", json!({ "address": address }), config)
+}
+
+pub fn measure_rpc_server(rpc_list: &[&str], timeout: u32) -> Vec<String> {
+    todo!()
 }
