@@ -5,6 +5,7 @@ authors = ["NKN"]
 edition = "2018"
 
 [dependencies]
+base58 = "0.2"
 hex = "0.4"
 rand = "0.8"
 rust-crypto = "0.2"

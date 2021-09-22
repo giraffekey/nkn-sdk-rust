@@ -1,5 +1,6 @@
 mod client;
 mod constant;
+mod crypto;
 mod message;
 mod multiclient;
 mod nanopay;
@@ -13,7 +14,7 @@ pub use message::{Message, MessageConfig};
 pub use nanopay::{NanoPay, NanoPayClaimer};
 pub use rpc::{Node, Registrant, Subscription};
 pub use transaction::{Transaction, TransactionConfig};
-pub use util::{Account, Subscribers};
+pub use util::{Account, Subscribers, string_to_amount, amount_to_string};
 pub use wallet::{Wallet, WalletConfig};
 
 #[cfg(test)]

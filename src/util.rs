@@ -1,4 +1,5 @@
-use crypto::ed25519;
+use crate::crypto::{code_hash_to_address, create_program_hash, keypair};
+
 use rand::Rng;
 use std::collections::HashMap;
 
@@ -6,6 +7,7 @@ pub struct Account {
     private_key: Vec<u8>,
     public_key: Vec<u8>,
     seed: Vec<u8>, // until a way to get seed from private key is implemented
+    program_hash: Vec<u8>,
 }
 
 impl Account {
@@ -14,12 +16,14 @@ impl Account {
             return Err("Invalid seed length".into());
         }
 
-        let (private_key, public_key) = ed25519::keypair(seed);
+        let (private_key, public_key) = keypair(seed);
+        let program_hash = create_program_hash(&public_key);
 
         Ok(Self {
-            private_key: private_key.to_vec(),
-            public_key: public_key.to_vec(),
+            private_key,
+            public_key,
             seed: seed.to_vec(),
+            program_hash,
         })
     }
 
@@ -35,6 +39,10 @@ impl Account {
 
     pub fn seed(&self) -> &[u8] {
         &self.seed
+    }
+
+    pub fn wallet_address(&self) -> String {
+        code_hash_to_address(&self.program_hash)
     }
 }
 
@@ -58,5 +66,5 @@ impl Subscribers {
 
     fn tx_pool_map(&self) -> &HashMap<String, String> {
         &self.tx_pool_map
-    }    
+    }
 }

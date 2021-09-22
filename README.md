@@ -217,7 +217,7 @@ Read and write to session:
 
 ```rust
 let data = session.read();
-let buf = [u8; 1024];
+let buf = [0u8; 1024];
 session.write(&buf);
 ```
 
