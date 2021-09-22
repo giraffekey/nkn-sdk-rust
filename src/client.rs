@@ -1,7 +1,7 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
 use crate::{
-    Account, MessageConfig, NanoPay, NanoPayClaimer, Node, Registrant, Subscribers, Subscription,
-    Transaction, TransactionConfig, Wallet, WalletConfig,
+    get_balance, Account, MessageConfig, NanoPay, NanoPayClaimer, Node, RPCConfig, Registrant,
+    Subscribers, Subscription, Transaction, TransactionConfig, Wallet, WalletConfig,
 };
 
 pub struct ClientConfig {
@@ -99,7 +99,26 @@ impl<'a> Client<'a> {
     }
 
     pub fn balance_by_address(&self, address: &str) -> u64 {
-        todo!()
+        let wallet_config = self.wallet.config();
+        if wallet_config.rpc_server_address.is_empty() {
+            get_balance(
+                address,
+                RPCConfig {
+                    rpc_server_address: self.config.rpc_server_address,
+                    rpc_timeout: self.config.rpc_timeout,
+                    rpc_concurrency: self.config.rpc_concurrency,
+                },
+            )
+        } else {
+            get_balance(
+                address,
+                RPCConfig {
+                    rpc_server_address: wallet_config.rpc_server_address,
+                    rpc_timeout: wallet_config.rpc_timeout,
+                    rpc_concurrency: wallet_config.rpc_concurrency,
+                },
+            )
+        }
     }
 
     pub fn close(&self) {

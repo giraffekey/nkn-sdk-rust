@@ -37,6 +37,14 @@ impl<'a> Wallet<'a> {
         todo!()
     }
 
+    pub fn config(&self) -> &WalletConfig {
+        &self.config
+    }
+
+    pub fn set_config(&mut self, config: WalletConfig) {
+        self.config = config
+    }
+
     pub fn account(&self) -> &Account {
         self.account
     }

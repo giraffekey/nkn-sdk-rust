@@ -12,9 +12,9 @@ mod wallet;
 pub use client::{Client, ClientConfig};
 pub use message::{Message, MessageConfig};
 pub use nanopay::{NanoPay, NanoPayClaimer};
-pub use rpc::{Node, Registrant, Subscription};
+pub use rpc::{get_balance, rpc_call, Node, RPCConfig, Registrant, Subscription};
 pub use transaction::{Transaction, TransactionConfig};
-pub use util::{Account, Subscribers, string_to_amount, amount_to_string};
+pub use util::{amount_to_string, string_to_amount, Account, Subscribers};
 pub use wallet::{Wallet, WalletConfig};
 
 #[cfg(test)]
