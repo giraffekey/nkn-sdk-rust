@@ -1,6 +1,6 @@
 use crate::constant::{CHECKSIG, FOOL_PROOF_PREFIX, SHA256_CHECKSUM};
 
-use base58::ToBase58;
+use base58::{FromBase58, ToBase58};
 use crypto::digest::Digest;
 use crypto::ed25519;
 use crypto::ripemd160::Ripemd160;
@@ -39,6 +39,11 @@ pub fn create_signature_program_code(public_key: &[u8]) -> Vec<u8> {
 pub fn to_code_hash(code: &[u8]) -> Vec<u8> {
     let hash = sha256_hash(code);
     ripemd160_hash(&hash)
+}
+
+pub fn to_script_hash(address: &str) -> Vec<u8> {
+    let hash = address.from_base58().unwrap();
+    hash[3..23].to_vec()
 }
 
 pub fn code_hash_to_address(hash: &[u8]) -> String {

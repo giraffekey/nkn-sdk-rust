@@ -1,7 +1,9 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
+use crate::rpc::RPCClient;
 use crate::{
     get_balance, Account, MessageConfig, NanoPay, NanoPayClaimer, Node, RPCConfig, Registrant,
-    Subscribers, Subscription, Transaction, TransactionConfig, Wallet, WalletConfig,
+    SignerRPCClient, Subscribers, Subscription, Transaction, TransactionConfig, Wallet,
+    WalletConfig,
 };
 
 pub struct ClientConfig {
@@ -94,77 +96,19 @@ impl<'a> Client<'a> {
         }
     }
 
-    pub fn balance(&self) -> u64 {
-        self.balance_by_address(self.wallet.address())
-    }
-
-    pub fn balance_by_address(&self, address: &str) -> u64 {
-        let wallet_config = self.wallet.config();
-        if wallet_config.rpc_server_address.is_empty() {
-            get_balance(
-                address,
-                RPCConfig {
-                    rpc_server_address: self.config.rpc_server_address,
-                    rpc_timeout: self.config.rpc_timeout,
-                    rpc_concurrency: self.config.rpc_concurrency,
-                },
-            )
-        } else {
-            get_balance(
-                address,
-                RPCConfig {
-                    rpc_server_address: wallet_config.rpc_server_address,
-                    rpc_timeout: wallet_config.rpc_timeout,
-                    rpc_concurrency: wallet_config.rpc_concurrency,
-                },
-            )
-        }
-    }
-
     pub fn close(&self) {
         todo!()
     }
 
-    pub fn height(&self) -> u32 {
+    pub fn is_closed(&self) -> bool {
+        todo!()
+    }
+
+    pub fn reconnect(&self) {
         todo!()
     }
 
     pub fn node(&self) -> Node {
-        todo!()
-    }
-
-    pub fn nonce(&self, tx_pool: bool) -> u64 {
-        todo!()
-    }
-
-    pub fn nonce_by_address(&self, address: &str, tx_pool: bool) -> u64 {
-        todo!()
-    }
-
-    pub fn registrant(&self, name: &str) -> Registrant {
-        todo!()
-    }
-
-    pub fn subscribers(
-        &self,
-        topic: &str,
-        offset: u32,
-        limit: u32,
-        meta: bool,
-        tx_pool: bool,
-    ) -> Subscribers {
-        todo!()
-    }
-
-    pub fn suscribers_count(&self, topic: &str) -> u32 {
-        todo!()
-    }
-
-    pub fn subscription(&self, topic: &str, subscriber: &str) -> Subscription {
-        todo!()
-    }
-
-    pub fn is_closed(&self) -> bool {
         todo!()
     }
 
@@ -193,18 +137,6 @@ impl<'a> Client<'a> {
         self.publish(topic, data, config)
     }
 
-    pub fn reconnect(&self) {
-        todo!()
-    }
-
-    pub fn register_name(&self, name: &str, config: TransactionConfig) -> String {
-        todo!()
-    }
-
-    pub fn delete_name(&self, name: &str, config: TransactionConfig) -> String {
-        todo!()
-    }
-
     pub fn send(&self, dests: &[&str], data: impl Into<Vec<u8>>, config: MessageConfig) {
         todo!()
     }
@@ -217,19 +149,101 @@ impl<'a> Client<'a> {
         self.send(dests, data, config)
     }
 
-    pub fn send_raw_transaction(&self, txn: Transaction) -> String {
-        todo!()
-    }
-
     pub fn set_write_deadline(&self, deadline: u64) {
         todo!()
     }
+}
 
-    pub fn sign_transaction(&self, tx: Transaction) {
+impl RPCClient for Client<'_> {
+    fn nonce(&self, tx_pool: bool) -> u64 {
         todo!()
     }
 
-    pub fn subscribe(
+    fn nonce_by_address(&self, address: &str, tx_pool: bool) -> u64 {
+        todo!()
+    }
+
+    fn balance(&self) -> u64 {
+        self.balance_by_address(self.wallet.address())
+    }
+
+    fn balance_by_address(&self, address: &str) -> u64 {
+        let wallet_config = self.wallet.config();
+        if wallet_config.rpc_server_address.is_empty() {
+            get_balance(
+                address,
+                RPCConfig {
+                    rpc_server_address: self.config.rpc_server_address.clone(),
+                    rpc_timeout: self.config.rpc_timeout,
+                    rpc_concurrency: self.config.rpc_concurrency,
+                },
+            )
+        } else {
+            get_balance(
+                address,
+                RPCConfig {
+                    rpc_server_address: wallet_config.rpc_server_address.clone(),
+                    rpc_timeout: wallet_config.rpc_timeout,
+                    rpc_concurrency: wallet_config.rpc_concurrency,
+                },
+            )
+        }
+    }
+
+    fn height(&self) -> u32 {
+        todo!()
+    }
+
+    fn subscribers(
+        &self,
+        topic: &str,
+        offset: u32,
+        limit: u32,
+        meta: bool,
+        tx_pool: bool,
+    ) -> Subscribers {
+        todo!()
+    }
+
+    fn subscription(&self, topic: &str, subscriber: &str) -> Subscription {
+        todo!()
+    }
+
+    fn suscribers_count(&self, topic: &str) -> u32 {
+        todo!()
+    }
+
+    fn registrant(&self, name: &str) -> Registrant {
+        todo!()
+    }
+
+    fn send_raw_transaction(&self, txn: Transaction) -> String {
+        todo!()
+    }
+}
+
+impl SignerRPCClient for Client<'_> {
+    fn sign_transaction(&self, tx: Transaction) {
+        todo!()
+    }
+
+    fn transfer(address: &str, amount: u64, config: TransactionConfig) -> String {
+        todo!()
+    }
+
+    fn register_name(&self, name: &str, config: TransactionConfig) -> String {
+        todo!()
+    }
+
+    fn transfer_name(name: &str, recipient_public_key: &[u8], config: TransactionConfig) -> String {
+        todo!()
+    }
+
+    fn delete_name(&self, name: &str, config: TransactionConfig) -> String {
+        todo!()
+    }
+
+    fn subscribe(
         identifier: &str,
         topic: &str,
         duration: u32,
@@ -239,19 +253,7 @@ impl<'a> Client<'a> {
         todo!()
     }
 
-    pub fn transfer(address: &str, amount: u64, config: TransactionConfig) -> String {
-        todo!()
-    }
-
-    pub fn transfer_name(
-        name: &str,
-        recipient_public_key: &[u8],
-        config: TransactionConfig,
-    ) -> String {
-        todo!()
-    }
-
-    pub fn unsubscribe(identifier: &str, topic: &str, config: TransactionConfig) -> String {
+    fn unsubscribe(identifier: &str, topic: &str, config: TransactionConfig) -> String {
         todo!()
     }
 }

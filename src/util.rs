@@ -1,6 +1,7 @@
 use crate::crypto::{code_hash_to_address, create_program_hash, keypair};
+use crate::RPCConfig;
 
-use rand::Rng;
+use rand::{thread_rng, Rng};
 use std::collections::HashMap;
 
 pub struct Account {
@@ -27,7 +28,8 @@ impl Account {
         })
     }
 
-    pub fn new_random<R: Rng + ?Sized>(rng: &mut R) -> Result<Self, String> {
+    pub fn new_random() -> Result<Self, String> {
+        let mut rng = thread_rng();
         let mut seed = [0; 32];
         rng.fill(&mut seed);
         Self::new(&seed)
@@ -39,6 +41,10 @@ impl Account {
 
     pub fn seed(&self) -> &[u8] {
         &self.seed
+    }
+
+    pub fn program_hash(&self) -> &[u8] {
+        &self.program_hash
     }
 
     pub fn wallet_address(&self) -> String {
@@ -67,4 +73,19 @@ impl Subscribers {
     fn tx_pool_map(&self) -> &HashMap<String, String> {
         &self.tx_pool_map
     }
+}
+
+pub fn get_subscribers(
+    topic: &str,
+    offset: u32,
+    limit: u32,
+    meta: bool,
+    tx_pool: bool,
+    config: RPCConfig,
+) -> Subscribers {
+    todo!()
+}
+
+pub fn measure_rpc_server(rpc_list: &[&str], timeout: u32) -> Vec<String> {
+    todo!()
 }

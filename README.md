@@ -56,8 +56,7 @@ latency, and session mode support.
 Create a client with a generated key pair:
 
 ```rust
-let mut rng = thread_rng();
-let account = Account::new_random(&mut rng).unwrap();
+let account = Account::new_random().unwrap();
 let client = Client::new(account, None, ClientConfig::default());
 ```
 
@@ -226,8 +225,7 @@ session.write(&buf);
 Create wallet SDK:
 
 ```rust
-let mut rng = thread_rng();
-let account = Account::new_random(&mut rng).unwrap();
+let account = Account::new_random().unwrap();
 let config = WalletConfig {
 	password: "password".into(),
 	..WalletConfig::default()
