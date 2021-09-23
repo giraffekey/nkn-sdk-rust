@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub struct MessageConfig {
     pub unencrypted: bool,
     pub no_reply: bool,

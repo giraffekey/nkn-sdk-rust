@@ -1,59 +1,105 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
 use crate::crypto::ScryptConfig;
-use crate::vault::account::AccountHolder;
-use crate::vault::data::WalletData;
-use crate::{
-    Account, NanoPay, NanoPayClaimer, RPCClient, Registrant, SignerRPCClient, Subscribers,
-    Subscription, Transaction, TransactionConfig,
+use crate::nanopay::{NanoPay, NanoPayClaimer};
+use crate::rpc::{RPCClient, Registrant, SignerRPCClient, Subscribers, Subscription};
+use crate::vault::data::{
+    WalletData, IV_LEN, MAX_COMPATIBLE_WALLET_VERSION, MIN_COMPATIBLE_WALLET_VERSION,
 };
+use crate::vault::{Account, AccountHolder};
+use crate::{Transaction, TransactionConfig};
 
+use rand::Rng;
+
+#[derive(Debug)]
 pub struct WalletConfig {
     pub rpc_server_address: Vec<String>,
     pub rpc_timeout: u32,
     pub rpc_concurrency: u32,
     pub password: String,
     pub master_key: Vec<u8>,
-    pub iv: Vec<u8>,
-    pub scrypt_config: ScryptConfig,
+    pub iv: [u8; IV_LEN],
+    pub scrypt: ScryptConfig,
 }
 
 impl Default for WalletConfig {
     fn default() -> Self {
+        let mut rng = rand::thread_rng();
+        let mut master_key = [0u8; 32];
+        rng.fill(&mut master_key);
+        let mut iv = [0u8; IV_LEN];
+        rng.fill(&mut iv);
+
         Self {
             rpc_server_address: Vec::new(),
             rpc_timeout: DEFAULT_RPC_TIMEOUT,
             rpc_concurrency: DEFAULT_RPC_CONCURRENCY,
             password: String::new(),
-            iv: Vec::new(),
-            master_key: Vec::new(),
-            scrypt_config: ScryptConfig::default(),
+            master_key: master_key.to_vec(),
+            iv,
+            scrypt: ScryptConfig::default(),
         }
     }
 }
 
-pub struct Wallet<'a> {
+pub struct Wallet {
     config: WalletConfig,
-    account: &'a Account,
+    account: Account,
     wallet_data: WalletData,
 }
 
-impl<'a> Wallet<'a> {
-    pub fn new(account: &'a Account, config: WalletConfig) -> Self {
-        let wallet_data = WalletData::new(account, &config.password, &config.master_key, &config.iv, config.scrypt_config.clone());
+impl Wallet {
+    pub fn new(account: Account, config: WalletConfig) -> Result<Self, String> {
+        let wallet_data = WalletData::new(
+            &account,
+            &config.password,
+            &config.master_key,
+            config.iv,
+            ScryptConfig { ..config.scrypt },
+        )?;
 
-        Self {
+        let config = WalletConfig {
+            password: String::new(),
+            master_key: Vec::new(),
+            ..config
+        };
+
+        Ok(Self {
             config,
             account,
             wallet_data,
-        }
+        })
     }
 
-    pub fn from_json(json: &str, config: WalletConfig) -> Self {
-        todo!()
+    pub fn from_json(json: &str, config: WalletConfig) -> Result<Self, String> {
+        let wallet_data: WalletData =
+            serde_json::from_str(json).map_err(|_| "Invalid JSON".to_string())?;
+
+        if wallet_data.version < MIN_COMPATIBLE_WALLET_VERSION
+            || wallet_data.version > MAX_COMPATIBLE_WALLET_VERSION
+        {
+            return Err("Incompatible wallet version".into());
+        }
+
+        let account = wallet_data.decrypt_account(&config.password)?;
+        if account.wallet_address() != wallet_data.address {
+            return Err("Wrong password".into());
+        }
+
+        let config = WalletConfig {
+            password: String::new(),
+            master_key: Vec::new(),
+            ..config
+        };
+
+        Ok(Self {
+            config,
+            account,
+            wallet_data,
+        })
     }
 
     pub fn to_json(&self) -> String {
-        todo!()
+        serde_json::to_string(&self.wallet_data).unwrap()
     }
 
     pub fn config(&self) -> &WalletConfig {
@@ -82,9 +128,9 @@ impl<'a> Wallet<'a> {
     }
 }
 
-impl AccountHolder for Wallet<'_> {
+impl AccountHolder for Wallet {
     fn account(&self) -> &Account {
-        self.account
+        &self.account
     }
 
     fn public_key(&self) -> &[u8] {
@@ -95,7 +141,7 @@ impl AccountHolder for Wallet<'_> {
         self.account.private_key()
     }
 
-    fn seed(&self) -> &[u8] {
+    fn seed(&self) -> Vec<u8> {
         self.account.seed()
     }
 
@@ -108,7 +154,7 @@ impl AccountHolder for Wallet<'_> {
     }
 }
 
-impl RPCClient for Wallet<'_> {
+impl RPCClient for Wallet {
     fn nonce(&self, tx_pool: bool) -> u64 {
         todo!()
     }
@@ -157,7 +203,7 @@ impl RPCClient for Wallet<'_> {
     }
 }
 
-impl SignerRPCClient for Wallet<'_> {
+impl SignerRPCClient for Wallet {
     fn sign_transaction(&self, tx: Transaction) {
         todo!()
     }

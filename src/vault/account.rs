@@ -1,4 +1,4 @@
-use crate::crypto::{ed25519_keypair, ripemd160_hash, sha256_hash};
+use crate::crypto::{ed25519_keypair, ed25519_seed_from_private_key, ripemd160_hash, sha256_hash};
 
 use base58::ToBase58;
 use rand::Rng;
@@ -40,10 +40,10 @@ fn code_hash_to_address(hash: &[u8]) -> String {
     data.to_base58()
 }
 
+#[derive(Debug, Clone)]
 pub struct Account {
     private_key: Vec<u8>,
     public_key: Vec<u8>,
-    seed: Vec<u8>, // until a way to get seed from private key is implemented
     program_hash: Vec<u8>,
 }
 
@@ -59,12 +59,12 @@ impl Account {
         Ok(Self {
             private_key,
             public_key,
-            seed: seed.to_vec(),
             program_hash,
         })
     }
 
-    pub fn random<R: Rng + ?Sized>(rng: &mut R) -> Result<Self, String> {
+    pub fn random() -> Result<Self, String> {
+        let mut rng = rand::thread_rng();
         let mut seed = [0; 32];
         rng.fill(&mut seed);
         Self::new(&seed)
@@ -78,8 +78,8 @@ impl Account {
         &self.private_key
     }
 
-    pub fn seed(&self) -> &[u8] {
-        &self.seed
+    pub fn seed(&self) -> Vec<u8> {
+        ed25519_seed_from_private_key(&self.private_key)
     }
 
     pub fn program_hash(&self) -> &[u8] {
@@ -103,7 +103,7 @@ pub trait AccountHolder {
     fn account(&self) -> &Account;
     fn public_key(&self) -> &[u8];
     fn private_key(&self) -> &[u8];
-    fn seed(&self) -> &[u8];
+    fn seed(&self) -> Vec<u8>;
     fn address(&self) -> String;
     fn program_hash(&self) -> &[u8];
 }

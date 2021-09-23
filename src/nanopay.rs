@@ -1,8 +1,9 @@
 use crate::rpc::RPCClient;
-use crate::{Transaction, Wallet};
+use crate::vault::Wallet;
+use crate::Transaction;
 
 use base58::FromBase58;
-use rand::{thread_rng, Rng};
+use rand::Rng;
 use std::time::SystemTime;
 
 fn to_script_hash(address: &str) -> Vec<u8> {
@@ -12,7 +13,7 @@ fn to_script_hash(address: &str) -> Vec<u8> {
 
 pub struct NanoPay<'a> {
     rpc_client: &'a dyn RPCClient,
-    wallet: &'a Wallet<'a>,
+    wallet: &'a Wallet,
     recipient_address: String,
     recipient_program_hash: Vec<u8>,
     fee: u64,
@@ -25,14 +26,14 @@ pub struct NanoPay<'a> {
 impl<'a> NanoPay<'a> {
     pub fn new(
         rpc_client: &'a dyn RPCClient,
-        wallet: &'a Wallet<'a>,
+        wallet: &'a Wallet,
         recipient_address: &str,
         fee: u64,
         duration: u32,
     ) -> Self {
         let recipient_program_hash = to_script_hash(recipient_address);
 
-        let mut rng = thread_rng();
+        let mut rng = rand::thread_rng();
         let id = rng.gen();
 
         Self {

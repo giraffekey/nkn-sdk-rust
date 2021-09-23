@@ -1,8 +1,9 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
-use crate::{Subscribers, Transaction, TransactionConfig};
+use crate::{Transaction, TransactionConfig};
 
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 
 pub trait RPCClient {
     fn nonce(&self, tx_pool: bool) -> u64;
@@ -40,6 +41,7 @@ pub trait SignerRPCClient {
     fn unsubscribe(identifier: &str, topic: &str, config: TransactionConfig) -> String;
 }
 
+#[derive(Debug)]
 pub struct RPCConfig {
     pub rpc_server_address: Vec<String>,
     pub rpc_timeout: u32,
@@ -56,11 +58,12 @@ impl Default for RPCConfig {
     }
 }
 
+#[derive(Debug)]
 pub struct Node {
-    address: String,
-    rpc_address: String,
-    public_key: Vec<u8>,
-    id: String,
+    pub address: String,
+    pub rpc_address: String,
+    pub public_key: Vec<u8>,
+    pub id: String,
 }
 
 pub fn get_ws_address(client_address: &str, config: RPCConfig) -> Node {
@@ -71,45 +74,65 @@ pub fn get_wss_address(client_address: &str, config: RPCConfig) -> Node {
     todo!()
 }
 
+#[derive(Debug)]
 pub struct NodeState {
-    address: String,
-    current_timestamp: u64,
-    height: u32,
-    id: String,
-    json_rpc_port: u32,
-    proposal_submitted: u32,
-    protocol_version: u32,
-    public_key: Vec<u8>,
-    relay_message_count: u64,
-    sync_state: String,
-    tls_json_rpc_domain: String,
-    tls_json_rpc_port: u32,
-    tls_websocket_domain: String,
-    tls_websocket_port: u32,
-    uptime: u64,
-    version: String,
-    websocket_port: u32,
+    pub address: String,
+    pub current_timestamp: u64,
+    pub height: u32,
+    pub id: String,
+    pub json_rpc_port: u32,
+    pub proposal_submitted: u32,
+    pub protocol_version: u32,
+    pub public_key: Vec<u8>,
+    pub relay_message_count: u64,
+    pub sync_state: String,
+    pub tls_json_rpc_domain: String,
+    pub tls_json_rpc_port: u32,
+    pub tls_websocket_domain: String,
+    pub tls_websocket_port: u32,
+    pub uptime: u64,
+    pub version: String,
+    pub websocket_port: u32,
 }
 
 pub fn get_node_state(config: RPCConfig) -> NodeState {
     todo!()
 }
 
+#[derive(Debug)]
 pub struct Registrant {
-    registrant: String,
-    expires_at: u64,
+    pub registrant: String,
+    pub expires_at: u64,
 }
 
 pub fn get_registrant(name: &str, config: RPCConfig) -> Registrant {
     todo!()
 }
 
+#[derive(Debug)]
 pub struct Subscription {
-    meta: String,
-    expires_at: u64,
+    pub meta: String,
+    pub expires_at: u64,
 }
 
 pub fn get_subscription(topic: &str, subscriber: &str, config: RPCConfig) -> Subscription {
+    todo!()
+}
+
+#[derive(Debug)]
+pub struct Subscribers {
+    pub map: HashMap<String, String>,
+    pub tx_pool_map: HashMap<String, String>,
+}
+
+pub fn get_subscribers(
+    topic: &str,
+    offset: u32,
+    limit: u32,
+    meta: bool,
+    tx_pool: bool,
+    config: RPCConfig,
+) -> Subscribers {
     todo!()
 }
 

@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub struct TransactionConfig {
     fee: u64,
     nonce: u64,

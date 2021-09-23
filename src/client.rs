@@ -1,14 +1,13 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
 use crate::crypto::ed25519_private_key_to_curve25519_private_key;
-use crate::rpc::RPCClient;
-use crate::vault::account::AccountHolder;
-
-use crate::{
-    get_balance, Account, MessageConfig, NanoPay, NanoPayClaimer, Node, RPCConfig, Registrant,
-    SignerRPCClient, Subscribers, Subscription, Transaction, TransactionConfig, Wallet,
-    WalletConfig,
+use crate::nanopay::{NanoPay, NanoPayClaimer};
+use crate::rpc::{
+    get_balance, Node, RPCClient, RPCConfig, Registrant, SignerRPCClient, Subscribers, Subscription,
 };
+use crate::vault::{Account, AccountHolder, Wallet, WalletConfig};
+use crate::{MessageConfig, Transaction, TransactionConfig};
 
+#[derive(Debug)]
 pub struct ClientConfig {
     pub rpc_server_address: Vec<String>,
     pub rpc_timeout: u32,
@@ -43,30 +42,34 @@ impl Default for ClientConfig {
     }
 }
 
-pub struct Client<'a> {
+pub struct Client {
     config: ClientConfig,
-    account: &'a Account,
-    wallet: Wallet<'a>,
+    account: Account,
+    wallet: Wallet,
     identifier: Option<String>,
     curve_secret_key: Vec<u8>,
 }
 
-impl<'a> Client<'a> {
-    pub fn new(account: &'a Account, identifier: Option<String>, config: ClientConfig) -> Self {
+impl Client {
+    pub fn new(
+        account: Account,
+        identifier: Option<String>,
+        config: ClientConfig,
+    ) -> Result<Self, String> {
         let wallet_config = WalletConfig {
             rpc_server_address: config.rpc_server_address.clone(),
             ..WalletConfig::default()
         };
-        let wallet = Wallet::new(account, wallet_config);
+        let wallet = Wallet::new(account.clone(), wallet_config)?;
         let curve_secret_key = ed25519_private_key_to_curve25519_private_key(account.private_key());
 
-        Self {
+        Ok(Self {
             config,
             account,
             wallet,
             identifier,
             curve_secret_key,
-        }
+        })
     }
 
     pub fn config(&self) -> &ClientConfig {
@@ -135,9 +138,9 @@ impl<'a> Client<'a> {
     }
 }
 
-impl AccountHolder for Client<'_> {
+impl AccountHolder for Client {
     fn account(&self) -> &Account {
-        self.account
+        &self.account
     }
 
     fn public_key(&self) -> &[u8] {
@@ -148,7 +151,7 @@ impl AccountHolder for Client<'_> {
         self.account.private_key()
     }
 
-    fn seed(&self) -> &[u8] {
+    fn seed(&self) -> Vec<u8> {
         self.account.seed()
     }
 
@@ -170,7 +173,7 @@ impl AccountHolder for Client<'_> {
     }
 }
 
-impl RPCClient for Client<'_> {
+impl RPCClient for Client {
     fn nonce(&self, tx_pool: bool) -> u64 {
         todo!()
     }
@@ -238,7 +241,7 @@ impl RPCClient for Client<'_> {
     }
 }
 
-impl SignerRPCClient for Client<'_> {
+impl SignerRPCClient for Client {
     fn sign_transaction(&self, tx: Transaction) {
         todo!()
     }

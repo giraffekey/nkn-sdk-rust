@@ -1,7 +1,5 @@
-use crate::{
-    RPCClient, Registrant, SignerRPCClient, Subscribers, Subscription, Transaction,
-    TransactionConfig,
-};
+use crate::rpc::{RPCClient, Registrant, SignerRPCClient, Subscribers, Subscription};
+use crate::{Transaction, TransactionConfig};
 
 pub struct MultiClientConfig {}
 
