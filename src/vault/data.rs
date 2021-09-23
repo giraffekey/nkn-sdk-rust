@@ -1,8 +1,7 @@
 use crate::crypto::{
-    aes_decrypt, aes_encrypt, ed25519_seed_from_private_key, scrypt_kdf, sha256_hash, ScryptConfig,
-    SCRYPT_SALT_LEN,
+    aes_decrypt, aes_encrypt, ed25519_seed_from_private_key, scrypt_kdf, sha256_hash,
 };
-use crate::vault::Account;
+use crate::vault::{Account, ScryptConfig, SCRYPT_SALT_LEN};
 
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +30,7 @@ pub struct ScryptConfigEncoded {
     pub salt: String,
 }
 
-fn encode_scrypt(scrypt: &ScryptConfig) -> ScryptConfigEncoded {
+fn encode_scrypt_config(scrypt: &ScryptConfig) -> ScryptConfigEncoded {
     ScryptConfigEncoded {
         log_n: scrypt.log_n,
         r: scrypt.r,
@@ -40,7 +39,7 @@ fn encode_scrypt(scrypt: &ScryptConfig) -> ScryptConfigEncoded {
     }
 }
 
-fn decode_scrypt(scrypt: &ScryptConfigEncoded) -> ScryptConfig {
+fn decode_scrypt_config(scrypt: &ScryptConfigEncoded) -> ScryptConfig {
     let mut salt = [0u8; SCRYPT_SALT_LEN];
     hex::decode_to_slice(&scrypt.salt, &mut salt).unwrap();
 
@@ -76,7 +75,7 @@ impl WalletData {
         let master_key_cipher = aes_encrypt(master_key, &password_key, &iv);
         let seed_cipher = aes_encrypt(&seed, &master_key, &iv);
 
-        let scrypt = encode_scrypt(&scrypt);
+        let scrypt = encode_scrypt_config(&scrypt);
 
         Ok(Self {
             version: WALLET_VERSION,
@@ -89,7 +88,7 @@ impl WalletData {
     }
 
     pub fn decrypt_master_key(&self, password: &str) -> Result<Vec<u8>, String> {
-        let scrypt = decode_scrypt(&self.scrypt);
+        let scrypt = decode_scrypt_config(&self.scrypt);
         let password_key = get_password_key(password.as_bytes(), self.version, &scrypt)?;
         let iv = hex::decode(&self.iv).unwrap();
         let master_key_cipher = hex::decode(&self.masterkey).unwrap();

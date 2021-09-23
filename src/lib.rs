@@ -8,5 +8,3 @@ pub mod vault;
 
 mod constant;
 mod crypto;
-
-pub use crate::crypto::ScryptConfig;
