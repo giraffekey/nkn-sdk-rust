@@ -2,11 +2,11 @@ use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
 use crate::crypto::ScryptConfig;
 use crate::nanopay::{NanoPay, NanoPayClaimer};
 use crate::rpc::{RPCClient, Registrant, SignerRPCClient, Subscribers, Subscription};
+use crate::transaction::{Transaction, TransactionConfig};
 use crate::vault::data::{
     WalletData, IV_LEN, MAX_COMPATIBLE_WALLET_VERSION, MIN_COMPATIBLE_WALLET_VERSION,
 };
 use crate::vault::{Account, AccountHolder};
-use crate::{Transaction, TransactionConfig};
 
 use rand::Rng;
 

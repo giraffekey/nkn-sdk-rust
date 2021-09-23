@@ -1,11 +1,12 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
 use crate::crypto::ed25519_private_key_to_curve25519_private_key;
+use crate::message::MessageConfig;
 use crate::nanopay::{NanoPay, NanoPayClaimer};
 use crate::rpc::{
     get_balance, Node, RPCClient, RPCConfig, Registrant, SignerRPCClient, Subscribers, Subscription,
 };
+use crate::transaction::{Transaction, TransactionConfig};
 use crate::vault::{Account, AccountHolder, Wallet, WalletConfig};
-use crate::{MessageConfig, Transaction, TransactionConfig};
 
 #[derive(Debug)]
 pub struct ClientConfig {

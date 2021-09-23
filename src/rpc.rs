@@ -1,5 +1,5 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
-use crate::{Transaction, TransactionConfig};
+use crate::transaction::{Transaction, TransactionConfig};
 
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::json;

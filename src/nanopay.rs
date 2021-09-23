@@ -1,6 +1,6 @@
 use crate::rpc::RPCClient;
+use crate::transaction::Transaction;
 use crate::vault::Wallet;
-use crate::Transaction;
 
 use base58::FromBase58;
 use rand::Rng;
