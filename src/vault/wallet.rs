@@ -1,8 +1,9 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
 use crate::nanopay::{NanoPay, NanoPayClaimer};
 use crate::rpc::{
-    get_balance, get_height, get_nonce, get_registrant, get_subscribers, get_subscribers_count,
-    get_subscription, send_raw_transaction, RPCClient, RPCConfig, Registrant, SignerRPCClient,
+    delete_name, get_balance, get_height, get_nonce, get_registrant, get_subscribers,
+    get_subscribers_count, get_subscription, register_name, send_raw_transaction, subscribe,
+    transfer, transfer_name, unsubscribe, RPCClient, RPCConfig, Registrant, SignerRPCClient,
     Subscribers, Subscription,
 };
 use crate::transaction::{Transaction, TransactionConfig};
@@ -231,33 +232,39 @@ impl SignerRPCClient for Wallet {
         todo!()
     }
 
-    fn transfer(address: &str, amount: u64, config: TransactionConfig) -> String {
-        todo!()
+    fn transfer(&self, address: &str, amount: u64, config: TransactionConfig) -> String {
+        transfer(self, address, amount, config)
     }
 
     fn register_name(&self, name: &str, config: TransactionConfig) -> String {
-        todo!()
+        register_name(self, name, config)
     }
 
-    fn transfer_name(name: &str, recipient_public_key: &[u8], config: TransactionConfig) -> String {
-        todo!()
+    fn transfer_name(
+        &self,
+        name: &str,
+        recipient_public_key: &[u8],
+        config: TransactionConfig,
+    ) -> String {
+        transfer_name(self, name, recipient_public_key, config)
     }
 
     fn delete_name(&self, name: &str, config: TransactionConfig) -> String {
-        todo!()
+        delete_name(self, name, config)
     }
 
     fn subscribe(
+        &self,
         identifier: &str,
         topic: &str,
         duration: u32,
         meta: &str,
         config: TransactionConfig,
     ) -> String {
-        todo!()
+        subscribe(self, identifier, topic, duration, meta, config)
     }
 
-    fn unsubscribe(identifier: &str, topic: &str, config: TransactionConfig) -> String {
-        todo!()
+    fn unsubscribe(&self, identifier: &str, topic: &str, config: TransactionConfig) -> String {
+        unsubscribe(self, identifier, topic, config)
     }
 }

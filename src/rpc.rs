@@ -27,18 +27,24 @@ pub trait RPCClient {
 
 pub trait SignerRPCClient {
     fn sign_transaction(&self, tx: Transaction);
-    fn transfer(address: &str, amount: u64, config: TransactionConfig) -> String;
+    fn transfer(&self, address: &str, amount: u64, config: TransactionConfig) -> String;
     fn register_name(&self, name: &str, config: TransactionConfig) -> String;
-    fn transfer_name(name: &str, recipient_public_key: &[u8], config: TransactionConfig) -> String;
+    fn transfer_name(
+        &self,
+        name: &str,
+        recipient_public_key: &[u8],
+        config: TransactionConfig,
+    ) -> String;
     fn delete_name(&self, name: &str, config: TransactionConfig) -> String;
     fn subscribe(
+        &self,
         identifier: &str,
         topic: &str,
         duration: u32,
         meta: &str,
         config: TransactionConfig,
     ) -> String;
-    fn unsubscribe(identifier: &str, topic: &str, config: TransactionConfig) -> String;
+    fn unsubscribe(&self, identifier: &str, topic: &str, config: TransactionConfig) -> String;
 }
 
 #[derive(Debug)]
@@ -186,9 +192,46 @@ pub fn send_raw_transaction(tx: Transaction, config: RPCConfig) -> String {
 }
 
 pub fn transfer<S: SignerRPCClient>(
-    s: S,
+    s: &S,
     address: &str,
     amount: u64,
+    config: TransactionConfig,
+) -> String {
+    todo!()
+}
+
+pub fn register_name<S: SignerRPCClient>(s: &S, name: &str, config: TransactionConfig) -> String {
+    todo!()
+}
+
+pub fn transfer_name<S: SignerRPCClient>(
+    s: &S,
+    name: &str,
+    recipient_public_key: &[u8],
+    config: TransactionConfig,
+) -> String {
+    todo!()
+}
+
+pub fn delete_name<S: SignerRPCClient>(s: &S, name: &str, config: TransactionConfig) -> String {
+    todo!()
+}
+
+pub fn subscribe<S: SignerRPCClient>(
+    s: &S,
+    identifier: &str,
+    topic: &str,
+    duration: u32,
+    meta: &str,
+    config: TransactionConfig,
+) -> String {
+    todo!()
+}
+
+pub fn unsubscribe<S: SignerRPCClient>(
+    s: &S,
+    identifier: &str,
+    topic: &str,
     config: TransactionConfig,
 ) -> String {
     todo!()

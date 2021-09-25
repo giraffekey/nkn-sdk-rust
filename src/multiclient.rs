@@ -59,7 +59,7 @@ impl SignerRPCClient for MultiClient {
         todo!()
     }
 
-    fn transfer(address: &str, amount: u64, config: TransactionConfig) -> String {
+    fn transfer(&self, address: &str, amount: u64, config: TransactionConfig) -> String {
         todo!()
     }
 
@@ -67,7 +67,12 @@ impl SignerRPCClient for MultiClient {
         todo!()
     }
 
-    fn transfer_name(name: &str, recipient_public_key: &[u8], config: TransactionConfig) -> String {
+    fn transfer_name(
+        &self,
+        name: &str,
+        recipient_public_key: &[u8],
+        config: TransactionConfig,
+    ) -> String {
         todo!()
     }
 
@@ -76,6 +81,7 @@ impl SignerRPCClient for MultiClient {
     }
 
     fn subscribe(
+        &self,
         identifier: &str,
         topic: &str,
         duration: u32,
@@ -85,7 +91,7 @@ impl SignerRPCClient for MultiClient {
         todo!()
     }
 
-    fn unsubscribe(identifier: &str, topic: &str, config: TransactionConfig) -> String {
+    fn unsubscribe(&self, identifier: &str, topic: &str, config: TransactionConfig) -> String {
         todo!()
     }
 }
