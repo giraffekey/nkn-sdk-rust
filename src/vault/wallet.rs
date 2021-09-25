@@ -1,6 +1,10 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
 use crate::nanopay::{NanoPay, NanoPayClaimer};
-use crate::rpc::{RPCClient, Registrant, SignerRPCClient, Subscribers, Subscription};
+use crate::rpc::{
+    get_balance, get_height, get_nonce, get_registrant, get_subscribers, get_subscribers_count,
+    get_subscription, send_raw_transaction, RPCClient, RPCConfig, Registrant, SignerRPCClient,
+    Subscribers, Subscription,
+};
 use crate::transaction::{Transaction, TransactionConfig};
 use crate::vault::data::{
     WalletData, IV_LEN, MAX_COMPATIBLE_WALLET_VERSION, MIN_COMPATIBLE_WALLET_VERSION,
@@ -109,12 +113,13 @@ impl Wallet {
         self.config = config
     }
 
-    pub fn verify_password(password: &str) -> bool {
-        todo!()
+    pub fn verify_password(&self, password: &str) -> Result<bool, String> {
+        let account = self.wallet_data.decrypt_account(password)?;
+        Ok(account.wallet_address() == self.wallet_data.address)
     }
 
-    pub fn create_nano_pay(&self, recipient_address: &str, fee: &str, duration: u32) -> NanoPay {
-        todo!()
+    pub fn create_nano_pay(&self, recipient_address: &str, fee: u64, duration: u32) -> NanoPay {
+        NanoPay::new(self, self, recipient_address, fee, duration)
     }
 
     pub fn create_nano_pay_claimer(
@@ -123,7 +128,7 @@ impl Wallet {
         claim_interval_ms: u32,
         min_flush_amount: u64,
     ) -> NanoPayClaimer {
-        todo!()
+        NanoPayClaimer::new(self, recipient_address, claim_interval_ms, min_flush_amount)
     }
 }
 
@@ -153,25 +158,33 @@ impl AccountHolder for Wallet {
     }
 }
 
+fn config_to_rpc_config(config: &WalletConfig) -> RPCConfig {
+    RPCConfig {
+        rpc_server_address: config.rpc_server_address.clone(),
+        rpc_timeout: config.rpc_timeout,
+        rpc_concurrency: config.rpc_concurrency,
+    }
+}
+
 impl RPCClient for Wallet {
     fn nonce(&self, tx_pool: bool) -> u64 {
-        todo!()
+        self.nonce_by_address(&self.address(), tx_pool)
     }
 
     fn nonce_by_address(&self, address: &str, tx_pool: bool) -> u64 {
-        todo!()
+        get_nonce(address, tx_pool, config_to_rpc_config(&self.config))
     }
 
     fn balance(&self) -> u64 {
-        todo!()
+        self.balance_by_address(&self.address())
     }
 
     fn balance_by_address(&self, address: &str) -> u64 {
-        todo!()
+        get_balance(address, config_to_rpc_config(&self.config))
     }
 
     fn height(&self) -> u32 {
-        todo!()
+        get_height(config_to_rpc_config(&self.config))
     }
 
     fn subscribers(
@@ -182,23 +195,34 @@ impl RPCClient for Wallet {
         meta: bool,
         tx_pool: bool,
     ) -> Subscribers {
-        todo!()
+        get_subscribers(
+            topic,
+            offset,
+            limit,
+            meta,
+            tx_pool,
+            config_to_rpc_config(&self.config),
+        )
     }
 
     fn subscription(&self, topic: &str, subscriber: &str) -> Subscription {
-        todo!()
+        get_subscription(topic, subscriber, config_to_rpc_config(&self.config))
     }
 
-    fn suscribers_count(&self, topic: &str) -> u32 {
-        todo!()
+    fn suscribers_count(&self, topic: &str, subscriber_hash_prefix: &[u8]) -> u32 {
+        get_subscribers_count(
+            topic,
+            subscriber_hash_prefix,
+            config_to_rpc_config(&self.config),
+        )
     }
 
     fn registrant(&self, name: &str) -> Registrant {
-        todo!()
+        get_registrant(name, config_to_rpc_config(&self.config))
     }
 
     fn send_raw_transaction(&self, txn: Transaction) -> String {
-        todo!()
+        send_raw_transaction(txn, config_to_rpc_config(&self.config))
     }
 }
 

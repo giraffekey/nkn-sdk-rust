@@ -1,7 +1,7 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
 use crate::transaction::{Transaction, TransactionConfig};
 
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -20,7 +20,7 @@ pub trait RPCClient {
         tx_pool: bool,
     ) -> Subscribers;
     fn subscription(&self, topic: &str, subscriber: &str) -> Subscription;
-    fn suscribers_count(&self, topic: &str) -> u32;
+    fn suscribers_count(&self, topic: &str, subscriber_hash_prefix: &[u8]) -> u32;
     fn registrant(&self, name: &str) -> Registrant;
     fn send_raw_transaction(&self, txn: Transaction) -> String;
 }
@@ -56,6 +56,14 @@ impl Default for RPCConfig {
             rpc_concurrency: DEFAULT_RPC_CONCURRENCY,
         }
     }
+}
+
+pub fn rpc_call<S: Serialize, D: DeserializeOwned>(
+    method: &str,
+    params: S,
+    config: RPCConfig,
+) -> D {
+    todo!()
 }
 
 #[derive(Debug)]
@@ -100,16 +108,6 @@ pub fn get_node_state(config: RPCConfig) -> NodeState {
 }
 
 #[derive(Debug)]
-pub struct Registrant {
-    pub registrant: String,
-    pub expires_at: u64,
-}
-
-pub fn get_registrant(name: &str, config: RPCConfig) -> Registrant {
-    todo!()
-}
-
-#[derive(Debug)]
 pub struct Subscription {
     pub meta: String,
     pub expires_at: u64,
@@ -136,18 +134,62 @@ pub fn get_subscribers(
     todo!()
 }
 
-pub fn rpc_call<S: Serialize, D: DeserializeOwned>(
-    method: &str,
-    params: S,
-    config: RPCConfig,
-) -> D {
+pub fn get_subscribers_count(topic: &str, subscriber_hash_prefix: &[u8], config: RPCConfig) -> u32 {
     todo!()
 }
 
+#[derive(Debug)]
+pub struct Registrant {
+    pub registrant: String,
+    pub expires_at: u64,
+}
+
+pub fn get_registrant(name: &str, config: RPCConfig) -> Registrant {
+    todo!()
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Nonce {
+    pub nonce: u64,
+    pub nonceInTxPool: u64,
+}
+
+pub fn get_nonce(address: &str, tx_pool: bool, config: RPCConfig) -> u64 {
+    let nonce: Nonce = rpc_call("getnoncebyaddr", json!({ "address": address }), config);
+    if tx_pool && nonce.nonceInTxPool > nonce.nonce {
+        nonce.nonceInTxPool
+    } else {
+        nonce.nonce
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Balance {
+    pub amount: u64,
+}
+
 pub fn get_balance(address: &str, config: RPCConfig) -> u64 {
-    rpc_call("getbalancebyaddr", json!({ "address": address }), config)
+    let balance: Balance = rpc_call("getbalancebyaddr", json!({ "address": address }), config);
+    balance.amount
+}
+
+pub fn get_height(config: RPCConfig) -> u32 {
+    rpc_call("getlatestblockheight", json!({}), config)
 }
 
 pub fn measure_rpc_server(rpc_list: &[&str], timeout: u32) -> Vec<String> {
+    todo!()
+}
+
+pub fn send_raw_transaction(tx: Transaction, config: RPCConfig) -> String {
+    todo!()
+}
+
+pub fn transfer<S: SignerRPCClient>(
+    s: S,
+    address: &str,
+    amount: u64,
+    config: TransactionConfig,
+) -> String {
     todo!()
 }

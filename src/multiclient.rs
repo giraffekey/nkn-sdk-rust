@@ -41,7 +41,7 @@ impl RPCClient for MultiClient {
         todo!()
     }
 
-    fn suscribers_count(&self, topic: &str) -> u32 {
+    fn suscribers_count(&self, topic: &str, subscriber_hash_prefix: &[u8]) -> u32 {
         todo!()
     }
 

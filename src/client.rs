@@ -174,6 +174,14 @@ impl AccountHolder for Client {
     }
 }
 
+fn config_to_rpc_config(config: &ClientConfig) -> RPCConfig {
+    RPCConfig {
+        rpc_server_address: config.rpc_server_address.clone(),
+        rpc_timeout: config.rpc_timeout,
+        rpc_concurrency: config.rpc_concurrency,
+    }
+}
+
 impl RPCClient for Client {
     fn nonce(&self, tx_pool: bool) -> u64 {
         todo!()
@@ -190,23 +198,9 @@ impl RPCClient for Client {
     fn balance_by_address(&self, address: &str) -> u64 {
         let wallet_config = self.wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
-            get_balance(
-                address,
-                RPCConfig {
-                    rpc_server_address: self.config.rpc_server_address.clone(),
-                    rpc_timeout: self.config.rpc_timeout,
-                    rpc_concurrency: self.config.rpc_concurrency,
-                },
-            )
+            get_balance(address, config_to_rpc_config(&self.config))
         } else {
-            get_balance(
-                address,
-                RPCConfig {
-                    rpc_server_address: wallet_config.rpc_server_address.clone(),
-                    rpc_timeout: wallet_config.rpc_timeout,
-                    rpc_concurrency: wallet_config.rpc_concurrency,
-                },
-            )
+            get_balance(address, config_to_rpc_config(&self.config))
         }
     }
 
@@ -229,7 +223,7 @@ impl RPCClient for Client {
         todo!()
     }
 
-    fn suscribers_count(&self, topic: &str) -> u32 {
+    fn suscribers_count(&self, topic: &str, subscriber_hash_prefix: &[u8]) -> u32 {
         todo!()
     }
 
