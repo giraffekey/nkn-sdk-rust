@@ -5,8 +5,11 @@ authors = ["NKN"]
 edition = "2018"
 
 [dependencies]
+async-trait = "0.1"
 base58 = "0.2"
 hex = "0.4"
+hyper = { version = "0.14", features = ["client", "http1", "http2"] }
+hyper-tls = "0.5"
 rand = "0.8"
 rust-crypto = "0.2"
 serde = { version = "1", features = ["derive"] }

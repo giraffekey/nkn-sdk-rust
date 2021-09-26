@@ -9,10 +9,13 @@ use crate::signature::Signer;
 use crate::transaction::{Transaction, TransactionConfig};
 use crate::vault::{Account, AccountHolder, Wallet, WalletConfig};
 
+use async_trait::async_trait;
+use std::time::Duration;
+
 #[derive(Debug)]
 pub struct ClientConfig {
     pub rpc_server_address: Vec<String>,
-    pub rpc_timeout: u32,
+    pub rpc_timeout: Duration,
     pub rpc_concurrency: u32,
     pub msg_chan_length: u32,
     pub connect_retries: u32,
@@ -183,29 +186,30 @@ fn config_to_rpc_config(config: &ClientConfig) -> RPCConfig {
     }
 }
 
+#[async_trait]
 impl RPCClient for Client {
-    fn nonce(&self, tx_pool: bool) -> u64 {
+    async fn nonce(&self, tx_pool: bool) -> u64 {
         todo!()
     }
 
-    fn nonce_by_address(&self, address: &str, tx_pool: bool) -> u64 {
+    async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> u64 {
         todo!()
     }
 
-    fn balance(&self) -> u64 {
-        self.balance_by_address(&self.wallet.address())
+    async fn balance(&self) -> u64 {
+        self.balance_by_address(&self.wallet.address()).await
     }
 
-    fn balance_by_address(&self, address: &str) -> u64 {
+    async fn balance_by_address(&self, address: &str) -> u64 {
         let wallet_config = self.wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
-            get_balance(address, config_to_rpc_config(&self.config))
+            get_balance(address, config_to_rpc_config(&self.config)).await
         } else {
-            get_balance(address, config_to_rpc_config(&self.config))
+            get_balance(address, config_to_rpc_config(&self.config)).await
         }
     }
 
-    fn height(&self) -> u32 {
+    async fn height(&self) -> u32 {
         todo!()
     }
 

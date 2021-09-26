@@ -14,12 +14,14 @@ use crate::vault::data::{
 };
 use crate::vault::{Account, AccountHolder, ScryptConfig};
 
+use async_trait::async_trait;
 use rand::Rng;
+use std::time::Duration;
 
 #[derive(Debug)]
 pub struct WalletConfig {
     pub rpc_server_address: Vec<String>,
-    pub rpc_timeout: u32,
+    pub rpc_timeout: Duration,
     pub rpc_concurrency: u32,
     pub password: String,
     pub master_key: Vec<u8>,
@@ -169,25 +171,26 @@ fn config_to_rpc_config(config: &WalletConfig) -> RPCConfig {
     }
 }
 
+#[async_trait]
 impl RPCClient for Wallet {
-    fn nonce(&self, tx_pool: bool) -> u64 {
-        self.nonce_by_address(&self.address(), tx_pool)
+    async fn nonce(&self, tx_pool: bool) -> u64 {
+        self.nonce_by_address(&self.address(), tx_pool).await
     }
 
-    fn nonce_by_address(&self, address: &str, tx_pool: bool) -> u64 {
-        get_nonce(address, tx_pool, config_to_rpc_config(&self.config))
+    async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> u64 {
+        get_nonce(address, tx_pool, config_to_rpc_config(&self.config)).await
     }
 
-    fn balance(&self) -> u64 {
-        self.balance_by_address(&self.address())
+    async fn balance(&self) -> u64 {
+        self.balance_by_address(&self.address()).await
     }
 
-    fn balance_by_address(&self, address: &str) -> u64 {
-        get_balance(address, config_to_rpc_config(&self.config))
+    async fn balance_by_address(&self, address: &str) -> u64 {
+        get_balance(address, config_to_rpc_config(&self.config)).await
     }
 
-    fn height(&self) -> u32 {
-        get_height(config_to_rpc_config(&self.config))
+    async fn height(&self) -> u32 {
+        get_height(config_to_rpc_config(&self.config)).await
     }
 
     fn subscribers(

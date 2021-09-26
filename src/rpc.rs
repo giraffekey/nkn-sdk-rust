@@ -1,16 +1,20 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
 use crate::transaction::{Transaction, TransactionConfig};
 
+use async_trait::async_trait;
+use hyper::{body, client::HttpConnector, Body, Client, Method, Request};
+use hyper_tls::HttpsConnector;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::{collections::HashMap, str, time::Duration};
 
+#[async_trait]
 pub trait RPCClient {
-    fn nonce(&self, tx_pool: bool) -> u64;
-    fn nonce_by_address(&self, address: &str, tx_pool: bool) -> u64;
-    fn balance(&self) -> u64;
-    fn balance_by_address(&self, address: &str) -> u64;
-    fn height(&self) -> u32;
+    async fn nonce(&self, tx_pool: bool) -> u64;
+    async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> u64;
+    async fn balance(&self) -> u64;
+    async fn balance_by_address(&self, address: &str) -> u64;
+    async fn height(&self) -> u32;
     fn subscribers(
         &self,
         topic: &str,
@@ -50,7 +54,7 @@ pub trait SignerRPCClient {
 #[derive(Debug)]
 pub struct RPCConfig {
     pub rpc_server_address: Vec<String>,
-    pub rpc_timeout: u32,
+    pub rpc_timeout: Duration,
     pub rpc_concurrency: u32,
 }
 
@@ -64,12 +68,65 @@ impl Default for RPCConfig {
     }
 }
 
-pub fn rpc_call<S: Serialize, D: DeserializeOwned>(
+#[derive(Deserialize)]
+struct RPCError {
+    code: i32,
+    message: String,
+    data: String,
+}
+
+#[derive(Deserialize)]
+struct RPCResponse<D> {
+    result: Option<D>,
+    error: Option<RPCError>,
+}
+
+async fn request<D: DeserializeOwned>(
+    client: &Client<HttpsConnector<HttpConnector>>,
+    address: &str,
+    body: String,
+) -> Result<D, ()> {
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(address)
+        .body(Body::from(body))
+        .unwrap();
+
+    let res = client.request(req).await.map_err(|_| ())?;
+    let body = body::to_bytes(res.into_body()).await.map_err(|_| ())?;
+    let body_str = str::from_utf8(&body).map_err(|_| ())?;
+    let res: RPCResponse<D> = serde_json::from_str(body_str).map_err(|_| ())?;
+    if let Some(_err) = res.error {
+        return Err(());
+    }
+    Ok(res.result.unwrap())
+}
+
+pub async fn rpc_call<S: Serialize, D: DeserializeOwned>(
     method: &str,
     params: S,
     config: RPCConfig,
-) -> D {
-    todo!()
+) -> Result<D, String> {
+    let https = HttpsConnector::new();
+    let client = Client::builder()
+        .pool_idle_timeout(config.rpc_timeout)
+        .build::<_, Body>(https);
+
+    let body = json!({
+        "id": "nkn-sdk-go",
+        "method": method,
+        "params": params,
+    })
+    .to_string();
+
+    for address in config.rpc_server_address {
+        match request(&client, &address, body.clone()).await {
+            Ok(res) => return Ok(res),
+            Err(()) => (),
+        }
+    }
+
+    Err("Requests failed".into())
 }
 
 #[derive(Debug)]
@@ -160,8 +217,10 @@ struct Nonce {
     pub nonceInTxPool: u64,
 }
 
-pub fn get_nonce(address: &str, tx_pool: bool, config: RPCConfig) -> u64 {
-    let nonce: Nonce = rpc_call("getnoncebyaddr", json!({ "address": address }), config);
+pub async fn get_nonce(address: &str, tx_pool: bool, config: RPCConfig) -> u64 {
+    let nonce: Nonce = rpc_call("getnoncebyaddr", json!({ "address": address }), config)
+        .await
+        .unwrap();
     if tx_pool && nonce.nonceInTxPool > nonce.nonce {
         nonce.nonceInTxPool
     } else {
@@ -174,13 +233,17 @@ struct Balance {
     pub amount: u64,
 }
 
-pub fn get_balance(address: &str, config: RPCConfig) -> u64 {
-    let balance: Balance = rpc_call("getbalancebyaddr", json!({ "address": address }), config);
+pub async fn get_balance(address: &str, config: RPCConfig) -> u64 {
+    let balance: Balance = rpc_call("getbalancebyaddr", json!({ "address": address }), config)
+        .await
+        .unwrap();
     balance.amount
 }
 
-pub fn get_height(config: RPCConfig) -> u32 {
+pub async fn get_height(config: RPCConfig) -> u32 {
     rpc_call("getlatestblockheight", json!({}), config)
+        .await
+        .unwrap()
 }
 
 pub fn measure_rpc_server(rpc_list: &[&str], timeout: u32) -> Vec<String> {

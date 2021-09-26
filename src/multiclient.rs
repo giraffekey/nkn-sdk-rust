@@ -1,28 +1,31 @@
 use crate::rpc::{RPCClient, Registrant, SignerRPCClient, Subscribers, Subscription};
 use crate::transaction::{Transaction, TransactionConfig};
 
+use async_trait::async_trait;
+
 pub struct MultiClientConfig {}
 
 pub struct MultiClient {}
 
+#[async_trait]
 impl RPCClient for MultiClient {
-    fn nonce(&self, tx_pool: bool) -> u64 {
+    async fn nonce(&self, tx_pool: bool) -> u64 {
         todo!()
     }
 
-    fn nonce_by_address(&self, address: &str, tx_pool: bool) -> u64 {
+    async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> u64 {
         todo!()
     }
 
-    fn balance(&self) -> u64 {
+    async fn balance(&self) -> u64 {
         todo!()
     }
 
-    fn balance_by_address(&self, address: &str) -> u64 {
+    async fn balance_by_address(&self, address: &str) -> u64 {
         todo!()
     }
 
-    fn height(&self) -> u32 {
+    async fn height(&self) -> u32 {
         todo!()
     }
 
