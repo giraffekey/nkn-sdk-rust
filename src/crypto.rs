@@ -14,6 +14,10 @@ pub fn ed25519_keypair(seed: &[u8]) -> (Vec<u8>, Vec<u8>) {
     (private_key.to_vec(), public_key.to_vec())
 }
 
+pub fn ed25519_sign(data: &[u8], private_key: &[u8]) -> Vec<u8> {
+    ed25519::signature(data, private_key).to_vec()
+}
+
 pub fn sha256_hash(input: &[u8]) -> Vec<u8> {
     let mut hasher = Sha3::sha3_256();
     hasher.input(input);

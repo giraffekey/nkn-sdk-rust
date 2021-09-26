@@ -55,7 +55,7 @@ impl RPCClient for MultiClient {
 }
 
 impl SignerRPCClient for MultiClient {
-    fn sign_transaction(&self, tx: Transaction) {
+    fn sign_transaction(&self, tx: &mut Transaction) {
         todo!()
     }
 

@@ -1,44 +1,8 @@
-use crate::crypto::{ed25519_keypair, ed25519_seed_from_private_key, ripemd160_hash, sha256_hash};
+use crate::crypto::{ed25519_keypair, ed25519_seed_from_private_key};
+use crate::program::{code_hash_to_address, create_program_hash};
+use crate::signature::Signer;
 
-use base58::ToBase58;
 use rand::Rng;
-
-const CHECKSIG: u8 = 0xAC;
-// FOOLPROOFPREFIX used for fool-proof prefix
-// base58.BitcoinEncoding[21] = 'N', base58.BitcoinEncoding[18] = 'K'
-// 33 = len(base58.Encode( (2**192).Bytes() )),  192 = 8bit * (UINT160SIZE + SHA256CHKSUM)
-// ((21 * 58**35) + (18 * 58**34) + (21 * 58**33)) >> 192 = 0x02b824
-const FOOL_PROOF_PREFIX: u64 = 0x02b824 + 1; // +1 for avoid affected by lower 192bits shift-add
-const SHA256_CHECKSUM: usize = 4;
-
-// CODE: len(publickey) + publickey + CHECKSIG
-fn create_signature_program_code(public_key: &[u8]) -> Vec<u8> {
-    let mut code = Vec::new();
-    code.push(public_key.len() as u8);
-    code.extend_from_slice(public_key);
-    code.push(CHECKSIG);
-    code
-}
-
-fn to_code_hash(code: &[u8]) -> Vec<u8> {
-    ripemd160_hash(&sha256_hash(code))
-}
-
-fn create_program_hash(public_key: &[u8]) -> Vec<u8> {
-    to_code_hash(&create_signature_program_code(public_key))
-}
-
-fn code_hash_to_address(hash: &[u8]) -> String {
-    let mut data = Vec::new();
-    data.extend_from_slice(&FOOL_PROOF_PREFIX.to_ne_bytes());
-    data.extend_from_slice(hash);
-
-    let temp = sha256_hash(&data);
-    let temp = sha256_hash(&temp);
-    data.extend_from_slice(&temp[0..SHA256_CHECKSUM]);
-
-    data.to_base58()
-}
 
 #[derive(Debug, Clone)]
 pub struct Account {
@@ -70,14 +34,6 @@ impl Account {
         Self::new(&seed)
     }
 
-    pub fn public_key(&self) -> &[u8] {
-        &self.public_key
-    }
-
-    pub fn private_key(&self) -> &[u8] {
-        &self.private_key
-    }
-
     pub fn seed(&self) -> Vec<u8> {
         ed25519_seed_from_private_key(&self.private_key)
     }
@@ -88,6 +44,16 @@ impl Account {
 
     pub fn wallet_address(&self) -> String {
         code_hash_to_address(&self.program_hash)
+    }
+}
+
+impl Signer for Account {
+    fn private_key(&self) -> &[u8] {
+        &self.private_key
+    }
+
+    fn public_key(&self) -> &[u8] {
+        &self.public_key
     }
 }
 

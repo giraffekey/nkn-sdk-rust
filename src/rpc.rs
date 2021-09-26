@@ -26,7 +26,7 @@ pub trait RPCClient {
 }
 
 pub trait SignerRPCClient {
-    fn sign_transaction(&self, tx: Transaction);
+    fn sign_transaction(&self, tx: &mut Transaction);
     fn transfer(&self, address: &str, amount: u64, config: TransactionConfig) -> String;
     fn register_name(&self, name: &str, config: TransactionConfig) -> String;
     fn transfer_name(

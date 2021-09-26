@@ -1,11 +1,13 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
 use crate::nanopay::{NanoPay, NanoPayClaimer};
+use crate::program::{create_signature_program_context, Program};
 use crate::rpc::{
     delete_name, get_balance, get_height, get_nonce, get_registrant, get_subscribers,
     get_subscribers_count, get_subscription, register_name, send_raw_transaction, subscribe,
     transfer, transfer_name, unsubscribe, RPCClient, RPCConfig, Registrant, SignerRPCClient,
     Subscribers, Subscription,
 };
+use crate::signature::{sign_by_signer, SignableData, Signer};
 use crate::transaction::{Transaction, TransactionConfig};
 use crate::vault::data::{
     WalletData, IV_LEN, MAX_COMPATIBLE_WALLET_VERSION, MIN_COMPATIBLE_WALLET_VERSION,
@@ -228,8 +230,10 @@ impl RPCClient for Wallet {
 }
 
 impl SignerRPCClient for Wallet {
-    fn sign_transaction(&self, tx: Transaction) {
-        todo!()
+    fn sign_transaction(&self, tx: &mut Transaction) {
+        let ct = create_signature_program_context(self.account.public_key());
+        let signature = sign_by_signer(tx, &self.account);
+        tx.set_programs(vec![Program::new(&ct, &signature)]);
     }
 
     fn transfer(&self, address: &str, amount: u64, config: TransactionConfig) -> String {

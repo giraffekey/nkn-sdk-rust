@@ -5,6 +5,7 @@ use crate::nanopay::{NanoPay, NanoPayClaimer};
 use crate::rpc::{
     get_balance, Node, RPCClient, RPCConfig, Registrant, SignerRPCClient, Subscribers, Subscription,
 };
+use crate::signature::Signer;
 use crate::transaction::{Transaction, TransactionConfig};
 use crate::vault::{Account, AccountHolder, Wallet, WalletConfig};
 
@@ -237,7 +238,7 @@ impl RPCClient for Client {
 }
 
 impl SignerRPCClient for Client {
-    fn sign_transaction(&self, tx: Transaction) {
+    fn sign_transaction(&self, tx: &mut Transaction) {
         todo!()
     }
 
