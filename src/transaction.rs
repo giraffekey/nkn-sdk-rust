@@ -1,6 +1,7 @@
 use crate::program::Program;
 use crate::signature::SignableData;
 
+use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 
 #[derive(Debug)]
@@ -20,6 +21,7 @@ impl Default for TransactionConfig {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize)]
 struct Payload {
     r#type: u32,
     data: Vec<u8>,
@@ -42,6 +44,7 @@ fn deserialize_payload(bytes: &[u8]) -> Payload {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize)]
 struct UnsignedTx {
     payload: Payload,
     nonce: u64,
@@ -49,6 +52,7 @@ struct UnsignedTx {
     attributes: Vec<u8>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Transaction {
     unsigned_tx: UnsignedTx,
     programs: Vec<Program>,

@@ -1,6 +1,7 @@
 use crate::crypto::{ripemd160_hash, sha256_hash};
 
 use base58::ToBase58;
+use serde::{Deserialize, Serialize};
 
 const SIGNATURE: u8 = 0;
 const CHECKSIG: u8 = 0xAC;
@@ -60,6 +61,7 @@ pub fn create_signature_program_context(owner_public_key: &[u8]) -> ProgramConte
     }
 }
 
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Program {
     code: Vec<u8>,
     parameter: Vec<u8>,

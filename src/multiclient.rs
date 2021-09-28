@@ -9,92 +9,107 @@ pub struct MultiClient {}
 
 #[async_trait]
 impl RPCClient for MultiClient {
-    async fn nonce(&self, tx_pool: bool) -> u64 {
+    async fn nonce(&self, tx_pool: bool) -> Result<u64, String> {
         todo!()
     }
 
-    async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> u64 {
+    async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> Result<u64, String> {
         todo!()
     }
 
-    async fn balance(&self) -> u64 {
+    async fn balance(&self) -> Result<u64, String> {
         todo!()
     }
 
-    async fn balance_by_address(&self, address: &str) -> u64 {
+    async fn balance_by_address(&self, address: &str) -> Result<u64, String> {
         todo!()
     }
 
-    async fn height(&self) -> u32 {
+    async fn height(&self) -> Result<u32, String> {
         todo!()
     }
 
-    fn subscribers(
+    async fn subscribers(
         &self,
         topic: &str,
         offset: u32,
         limit: u32,
         meta: bool,
         tx_pool: bool,
-    ) -> Subscribers {
+    ) -> Result<Subscribers, String> {
         todo!()
     }
 
-    fn subscription(&self, topic: &str, subscriber: &str) -> Subscription {
+    async fn subscription(&self, topic: &str, subscriber: &str) -> Result<Subscription, String> {
         todo!()
     }
 
-    fn suscribers_count(&self, topic: &str, subscriber_hash_prefix: &[u8]) -> u32 {
+    async fn suscribers_count(
+        &self,
+        topic: &str,
+        subscriber_hash_prefix: &[u8],
+    ) -> Result<u32, String> {
         todo!()
     }
 
-    fn registrant(&self, name: &str) -> Registrant {
+    async fn registrant(&self, name: &str) -> Result<Registrant, String> {
         todo!()
     }
 
-    fn send_raw_transaction(&self, txn: Transaction) -> String {
+    async fn send_raw_transaction(&self, txn: Transaction) -> Result<String, String> {
         todo!()
     }
 }
 
+#[async_trait]
 impl SignerRPCClient for MultiClient {
     fn sign_transaction(&self, tx: &mut Transaction) {
         todo!()
     }
 
-    fn transfer(&self, address: &str, amount: u64, config: TransactionConfig) -> String {
+    async fn transfer(
+        &self,
+        address: &str,
+        amount: u64,
+        config: TransactionConfig,
+    ) -> Result<String, String> {
         todo!()
     }
 
-    fn register_name(&self, name: &str, config: TransactionConfig) -> String {
+    async fn register_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
         todo!()
     }
 
-    fn transfer_name(
+    async fn transfer_name(
         &self,
         name: &str,
         recipient_public_key: &[u8],
         config: TransactionConfig,
-    ) -> String {
+    ) -> Result<String, String> {
         todo!()
     }
 
-    fn delete_name(&self, name: &str, config: TransactionConfig) -> String {
+    async fn delete_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
         todo!()
     }
 
-    fn subscribe(
+    async fn subscribe(
         &self,
         identifier: &str,
         topic: &str,
         duration: u32,
         meta: &str,
         config: TransactionConfig,
-    ) -> String {
+    ) -> Result<String, String> {
         todo!()
     }
 
-    fn unsubscribe(&self, identifier: &str, topic: &str, config: TransactionConfig) -> String {
+    async fn unsubscribe(
+        &self,
+        identifier: &str,
+        topic: &str,
+        config: TransactionConfig,
+    ) -> Result<String, String> {
         todo!()
     }
 }

@@ -173,34 +173,34 @@ fn config_to_rpc_config(config: &WalletConfig) -> RPCConfig {
 
 #[async_trait]
 impl RPCClient for Wallet {
-    async fn nonce(&self, tx_pool: bool) -> u64 {
+    async fn nonce(&self, tx_pool: bool) -> Result<u64, String> {
         self.nonce_by_address(&self.address(), tx_pool).await
     }
 
-    async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> u64 {
+    async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> Result<u64, String> {
         get_nonce(address, tx_pool, config_to_rpc_config(&self.config)).await
     }
 
-    async fn balance(&self) -> u64 {
+    async fn balance(&self) -> Result<u64, String> {
         self.balance_by_address(&self.address()).await
     }
 
-    async fn balance_by_address(&self, address: &str) -> u64 {
+    async fn balance_by_address(&self, address: &str) -> Result<u64, String> {
         get_balance(address, config_to_rpc_config(&self.config)).await
     }
 
-    async fn height(&self) -> u32 {
+    async fn height(&self) -> Result<u32, String> {
         get_height(config_to_rpc_config(&self.config)).await
     }
 
-    fn subscribers(
+    async fn subscribers(
         &self,
         topic: &str,
         offset: u32,
         limit: u32,
         meta: bool,
         tx_pool: bool,
-    ) -> Subscribers {
+    ) -> Result<Subscribers, String> {
         get_subscribers(
             topic,
             offset,
@@ -209,29 +209,36 @@ impl RPCClient for Wallet {
             tx_pool,
             config_to_rpc_config(&self.config),
         )
+        .await
     }
 
-    fn subscription(&self, topic: &str, subscriber: &str) -> Subscription {
-        get_subscription(topic, subscriber, config_to_rpc_config(&self.config))
+    async fn subscription(&self, topic: &str, subscriber: &str) -> Result<Subscription, String> {
+        get_subscription(topic, subscriber, config_to_rpc_config(&self.config)).await
     }
 
-    fn suscribers_count(&self, topic: &str, subscriber_hash_prefix: &[u8]) -> u32 {
+    async fn suscribers_count(
+        &self,
+        topic: &str,
+        subscriber_hash_prefix: &[u8],
+    ) -> Result<u32, String> {
         get_subscribers_count(
             topic,
             subscriber_hash_prefix,
             config_to_rpc_config(&self.config),
         )
+        .await
     }
 
-    fn registrant(&self, name: &str) -> Registrant {
-        get_registrant(name, config_to_rpc_config(&self.config))
+    async fn registrant(&self, name: &str) -> Result<Registrant, String> {
+        get_registrant(name, config_to_rpc_config(&self.config)).await
     }
 
-    fn send_raw_transaction(&self, txn: Transaction) -> String {
-        send_raw_transaction(txn, config_to_rpc_config(&self.config))
+    async fn send_raw_transaction(&self, txn: Transaction) -> Result<String, String> {
+        send_raw_transaction(txn, config_to_rpc_config(&self.config)).await
     }
 }
 
+#[async_trait]
 impl SignerRPCClient for Wallet {
     fn sign_transaction(&self, tx: &mut Transaction) {
         let ct = create_signature_program_context(self.account.public_key());
@@ -239,39 +246,49 @@ impl SignerRPCClient for Wallet {
         tx.set_programs(vec![Program::new(&ct, &signature)]);
     }
 
-    fn transfer(&self, address: &str, amount: u64, config: TransactionConfig) -> String {
-        transfer(self, address, amount, config)
+    async fn transfer(
+        &self,
+        address: &str,
+        amount: u64,
+        config: TransactionConfig,
+    ) -> Result<String, String> {
+        transfer(self, address, amount, config).await
     }
 
-    fn register_name(&self, name: &str, config: TransactionConfig) -> String {
-        register_name(self, name, config)
+    async fn register_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
+        register_name(self, name, config).await
     }
 
-    fn transfer_name(
+    async fn transfer_name(
         &self,
         name: &str,
         recipient_public_key: &[u8],
         config: TransactionConfig,
-    ) -> String {
-        transfer_name(self, name, recipient_public_key, config)
+    ) -> Result<String, String> {
+        transfer_name(self, name, recipient_public_key, config).await
     }
 
-    fn delete_name(&self, name: &str, config: TransactionConfig) -> String {
-        delete_name(self, name, config)
+    async fn delete_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
+        delete_name(self, name, config).await
     }
 
-    fn subscribe(
+    async fn subscribe(
         &self,
         identifier: &str,
         topic: &str,
         duration: u32,
         meta: &str,
         config: TransactionConfig,
-    ) -> String {
-        subscribe(self, identifier, topic, duration, meta, config)
+    ) -> Result<String, String> {
+        subscribe(self, identifier, topic, duration, meta, config).await
     }
 
-    fn unsubscribe(&self, identifier: &str, topic: &str, config: TransactionConfig) -> String {
-        unsubscribe(self, identifier, topic, config)
+    async fn unsubscribe(
+        &self,
+        identifier: &str,
+        topic: &str,
+        config: TransactionConfig,
+    ) -> Result<String, String> {
+        unsubscribe(self, identifier, topic, config).await
     }
 }

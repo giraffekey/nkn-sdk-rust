@@ -5,50 +5,65 @@ use async_trait::async_trait;
 use hyper::{body, client::HttpConnector, Body, Client, Method, Request};
 use hyper_tls::HttpsConnector;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value as JsonValue};
 use std::{collections::HashMap, str, time::Duration};
 
 #[async_trait]
 pub trait RPCClient {
-    async fn nonce(&self, tx_pool: bool) -> u64;
-    async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> u64;
-    async fn balance(&self) -> u64;
-    async fn balance_by_address(&self, address: &str) -> u64;
-    async fn height(&self) -> u32;
-    fn subscribers(
+    async fn nonce(&self, tx_pool: bool) -> Result<u64, String>;
+    async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> Result<u64, String>;
+    async fn balance(&self) -> Result<u64, String>;
+    async fn balance_by_address(&self, address: &str) -> Result<u64, String>;
+    async fn height(&self) -> Result<u32, String>;
+    async fn subscribers(
         &self,
         topic: &str,
         offset: u32,
         limit: u32,
         meta: bool,
         tx_pool: bool,
-    ) -> Subscribers;
-    fn subscription(&self, topic: &str, subscriber: &str) -> Subscription;
-    fn suscribers_count(&self, topic: &str, subscriber_hash_prefix: &[u8]) -> u32;
-    fn registrant(&self, name: &str) -> Registrant;
-    fn send_raw_transaction(&self, txn: Transaction) -> String;
+    ) -> Result<Subscribers, String>;
+    async fn subscription(&self, topic: &str, subscriber: &str) -> Result<Subscription, String>;
+    async fn suscribers_count(
+        &self,
+        topic: &str,
+        subscriber_hash_prefix: &[u8],
+    ) -> Result<u32, String>;
+    async fn registrant(&self, name: &str) -> Result<Registrant, String>;
+    async fn send_raw_transaction(&self, txn: Transaction) -> Result<String, String>;
 }
 
+#[async_trait]
 pub trait SignerRPCClient {
     fn sign_transaction(&self, tx: &mut Transaction);
-    fn transfer(&self, address: &str, amount: u64, config: TransactionConfig) -> String;
-    fn register_name(&self, name: &str, config: TransactionConfig) -> String;
-    fn transfer_name(
+    async fn transfer(
+        &self,
+        address: &str,
+        amount: u64,
+        config: TransactionConfig,
+    ) -> Result<String, String>;
+    async fn register_name(&self, name: &str, config: TransactionConfig) -> Result<String, String>;
+    async fn transfer_name(
         &self,
         name: &str,
         recipient_public_key: &[u8],
         config: TransactionConfig,
-    ) -> String;
-    fn delete_name(&self, name: &str, config: TransactionConfig) -> String;
-    fn subscribe(
+    ) -> Result<String, String>;
+    async fn delete_name(&self, name: &str, config: TransactionConfig) -> Result<String, String>;
+    async fn subscribe(
         &self,
         identifier: &str,
         topic: &str,
         duration: u32,
         meta: &str,
         config: TransactionConfig,
-    ) -> String;
-    fn unsubscribe(&self, identifier: &str, topic: &str, config: TransactionConfig) -> String;
+    ) -> Result<String, String>;
+    async fn unsubscribe(
+        &self,
+        identifier: &str,
+        topic: &str,
+        config: TransactionConfig,
+    ) -> Result<String, String>;
 }
 
 #[derive(Debug)]
@@ -129,7 +144,7 @@ pub async fn rpc_call<S: Serialize, D: DeserializeOwned>(
     Err("Requests failed".into())
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
 pub struct Node {
     pub address: String,
     pub rpc_address: String,
@@ -137,15 +152,15 @@ pub struct Node {
     pub id: String,
 }
 
-pub fn get_ws_address(client_address: &str, config: RPCConfig) -> Node {
-    todo!()
+pub async fn get_ws_address(client_address: &str, config: RPCConfig) -> Result<Node, String> {
+    rpc_call("getwsaddr", json!({ "address": client_address }), config).await
 }
 
-pub fn get_wss_address(client_address: &str, config: RPCConfig) -> Node {
-    todo!()
+pub async fn get_wss_address(client_address: &str, config: RPCConfig) -> Result<Node, String> {
+    rpc_call("getwssaddr", json!({ "address": client_address }), config).await
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
 pub struct NodeState {
     pub address: String,
     pub current_timestamp: u64,
@@ -166,49 +181,116 @@ pub struct NodeState {
     pub websocket_port: u32,
 }
 
-pub fn get_node_state(config: RPCConfig) -> NodeState {
-    todo!()
+pub async fn get_node_state(config: RPCConfig) -> Result<NodeState, String> {
+    rpc_call("getnodestate", json!({}), config).await
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
 pub struct Subscription {
     pub meta: String,
     pub expires_at: u64,
 }
 
-pub fn get_subscription(topic: &str, subscriber: &str, config: RPCConfig) -> Subscription {
-    todo!()
+pub async fn get_subscription(
+    topic: &str,
+    subscriber: &str,
+    config: RPCConfig,
+) -> Result<Subscription, String> {
+    rpc_call(
+        "getsubscription",
+        json!({
+            "topic": topic,
+            "subscriber": subscriber,
+        }),
+        config,
+    )
+    .await
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
 pub struct Subscribers {
-    pub map: HashMap<String, String>,
-    pub tx_pool_map: HashMap<String, String>,
+    pub subscribers: HashMap<String, String>,
+    pub subscribers_in_tx_pool: HashMap<String, String>,
 }
 
-pub fn get_subscribers(
+pub async fn get_subscribers(
     topic: &str,
     offset: u32,
     limit: u32,
     meta: bool,
     tx_pool: bool,
     config: RPCConfig,
-) -> Subscribers {
-    todo!()
+) -> Result<Subscribers, String> {
+    let subscribers: JsonValue = rpc_call(
+        "getsubscribers",
+        json!({
+            "topic": topic,
+            "offset": offset,
+            "limit": limit,
+            "meta": meta,
+            "txPool": tx_pool,
+        }),
+        config,
+    )
+    .await?;
+
+    if meta {
+        Ok(Subscribers {
+            subscribers: subscribers["subscribers"]
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(subscriber, meta)| (subscriber.clone(), meta.as_str().unwrap().into()))
+                .collect(),
+            subscribers_in_tx_pool: if tx_pool {
+                subscribers["subscribersInTxPool"]
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(subscriber, meta)| (subscriber.clone(), meta.as_str().unwrap().into()))
+                    .collect()
+            } else {
+                HashMap::new()
+            },
+        })
+    } else {
+        Ok(Subscribers {
+            subscribers: subscribers["subscribers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|subscriber| (subscriber.as_str().unwrap().into(), "".into()))
+                .collect(),
+            subscribers_in_tx_pool: if tx_pool {
+                subscribers["subscribersInTxPool"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|subscriber| (subscriber.as_str().unwrap().into(), "".into()))
+                    .collect()
+            } else {
+                HashMap::new()
+            },
+        })
+    }
 }
 
-pub fn get_subscribers_count(topic: &str, subscriber_hash_prefix: &[u8], config: RPCConfig) -> u32 {
-    todo!()
+pub async fn get_subscribers_count(
+    topic: &str,
+    subscriber_hash_prefix: &[u8],
+    config: RPCConfig,
+) -> Result<u32, String> {
+    rpc_call("getsubscriberscount", json!({ "topic": topic }), config).await
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize)]
 pub struct Registrant {
     pub registrant: String,
     pub expires_at: u64,
 }
 
-pub fn get_registrant(name: &str, config: RPCConfig) -> Registrant {
-    todo!()
+pub async fn get_registrant(name: &str, config: RPCConfig) -> Result<Registrant, String> {
+    rpc_call("getregistrant", json!({ "name": name }), config).await
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -217,14 +299,13 @@ struct Nonce {
     pub nonceInTxPool: u64,
 }
 
-pub async fn get_nonce(address: &str, tx_pool: bool, config: RPCConfig) -> u64 {
-    let nonce: Nonce = rpc_call("getnoncebyaddr", json!({ "address": address }), config)
-        .await
-        .unwrap();
+pub async fn get_nonce(address: &str, tx_pool: bool, config: RPCConfig) -> Result<u64, String> {
+    let nonce: Nonce = rpc_call("getnoncebyaddr", json!({ "address": address }), config).await?;
+
     if tx_pool && nonce.nonceInTxPool > nonce.nonce {
-        nonce.nonceInTxPool
+        Ok(nonce.nonceInTxPool)
     } else {
-        nonce.nonce
+        Ok(nonce.nonce)
     }
 }
 
@@ -233,69 +314,76 @@ struct Balance {
     pub amount: u64,
 }
 
-pub async fn get_balance(address: &str, config: RPCConfig) -> u64 {
-    let balance: Balance = rpc_call("getbalancebyaddr", json!({ "address": address }), config)
-        .await
-        .unwrap();
-    balance.amount
+pub async fn get_balance(address: &str, config: RPCConfig) -> Result<u64, String> {
+    let balance: Balance =
+        rpc_call("getbalancebyaddr", json!({ "address": address }), config).await?;
+
+    Ok(balance.amount)
 }
 
-pub async fn get_height(config: RPCConfig) -> u32 {
-    rpc_call("getlatestblockheight", json!({}), config)
-        .await
-        .unwrap()
+pub async fn get_height(config: RPCConfig) -> Result<u32, String> {
+    rpc_call("getlatestblockheight", json!({}), config).await
 }
 
-pub fn measure_rpc_server(rpc_list: &[&str], timeout: u32) -> Vec<String> {
-    todo!()
+pub async fn send_raw_transaction(tx: Transaction, config: RPCConfig) -> Result<String, String> {
+    let tx_hex: String = hex::encode(serde_json::to_string(&tx).unwrap());
+    rpc_call("sendrawtransaction", json!({ "tx": tx_hex }), config).await
 }
 
-pub fn send_raw_transaction(tx: Transaction, config: RPCConfig) -> String {
-    todo!()
-}
-
-pub fn transfer<S: SignerRPCClient>(
+pub async fn transfer<S: SignerRPCClient>(
     s: &S,
     address: &str,
     amount: u64,
     config: TransactionConfig,
-) -> String {
+) -> Result<String, String> {
     todo!()
 }
 
-pub fn register_name<S: SignerRPCClient>(s: &S, name: &str, config: TransactionConfig) -> String {
+pub async fn register_name<S: SignerRPCClient>(
+    s: &S,
+    name: &str,
+    config: TransactionConfig,
+) -> Result<String, String> {
     todo!()
 }
 
-pub fn transfer_name<S: SignerRPCClient>(
+pub async fn transfer_name<S: SignerRPCClient>(
     s: &S,
     name: &str,
     recipient_public_key: &[u8],
     config: TransactionConfig,
-) -> String {
+) -> Result<String, String> {
     todo!()
 }
 
-pub fn delete_name<S: SignerRPCClient>(s: &S, name: &str, config: TransactionConfig) -> String {
+pub async fn delete_name<S: SignerRPCClient>(
+    s: &S,
+    name: &str,
+    config: TransactionConfig,
+) -> Result<String, String> {
     todo!()
 }
 
-pub fn subscribe<S: SignerRPCClient>(
+pub async fn subscribe<S: SignerRPCClient>(
     s: &S,
     identifier: &str,
     topic: &str,
     duration: u32,
     meta: &str,
     config: TransactionConfig,
-) -> String {
+) -> Result<String, String> {
     todo!()
 }
 
-pub fn unsubscribe<S: SignerRPCClient>(
+pub async fn unsubscribe<S: SignerRPCClient>(
     s: &S,
     identifier: &str,
     topic: &str,
     config: TransactionConfig,
-) -> String {
+) -> Result<String, String> {
+    todo!()
+}
+
+pub async fn measure_rpc_server(rpc_list: &[&str], timeout: u32) -> Result<Vec<String>, String> {
     todo!()
 }
