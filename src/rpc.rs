@@ -1,4 +1,6 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
+use crate::program::{create_program_hash, to_script_hash};
+use crate::signature::Signer;
 use crate::transaction::{Transaction, TransactionConfig};
 
 use async_trait::async_trait;
@@ -34,7 +36,7 @@ pub trait RPCClient {
 }
 
 #[async_trait]
-pub trait SignerRPCClient {
+pub trait SignerRPCClient: Signer + RPCClient {
     fn sign_transaction(&self, tx: &mut Transaction);
     async fn transfer(
         &self,
@@ -296,14 +298,14 @@ pub async fn get_registrant(name: &str, config: RPCConfig) -> Result<Registrant,
 #[derive(Debug, Deserialize, Serialize)]
 struct Nonce {
     pub nonce: u64,
-    pub nonceInTxPool: u64,
+    pub nonce_in_tx_pool: u64,
 }
 
 pub async fn get_nonce(address: &str, tx_pool: bool, config: RPCConfig) -> Result<u64, String> {
     let nonce: Nonce = rpc_call("getnoncebyaddr", json!({ "address": address }), config).await?;
 
-    if tx_pool && nonce.nonceInTxPool > nonce.nonce {
-        Ok(nonce.nonceInTxPool)
+    if tx_pool && nonce.nonce_in_tx_pool > nonce.nonce {
+        Ok(nonce.nonce_in_tx_pool)
     } else {
         Ok(nonce.nonce)
     }
@@ -336,7 +338,23 @@ pub async fn transfer<S: SignerRPCClient>(
     amount: u64,
     config: TransactionConfig,
 ) -> Result<String, String> {
-    todo!()
+    let sender = create_program_hash(s.public_key());
+    let recipient = to_script_hash(address);
+
+    let nonce = if config.nonce > 0 {
+        config.nonce
+    } else {
+        s.nonce(true).await?
+    };
+
+    let mut tx = Transaction::new_transfer_asset(&sender, &recipient, nonce, amount, config.fee);
+
+    if config.attributes.len() > 0 {
+        tx.unsigned_tx.attributes = config.attributes;
+    }
+
+    s.sign_transaction(&mut tx);
+    s.send_raw_transaction(tx).await
 }
 
 pub async fn register_name<S: SignerRPCClient>(

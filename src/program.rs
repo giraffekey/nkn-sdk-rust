@@ -1,6 +1,6 @@
 use crate::crypto::{ripemd160_hash, sha256_hash};
 
-use base58::ToBase58;
+use base58::{FromBase58, ToBase58};
 use serde::{Deserialize, Serialize};
 
 const SIGNATURE: u8 = 0;
@@ -39,6 +39,11 @@ pub fn code_hash_to_address(hash: &[u8]) -> String {
     data.extend_from_slice(&temp[0..SHA256_CHECKSUM]);
 
     data.to_base58()
+}
+
+pub fn to_script_hash(address: &str) -> Vec<u8> {
+    let hash = address.from_base58().unwrap();
+    hash[3..23].to_vec()
 }
 
 pub struct ProgramContext {

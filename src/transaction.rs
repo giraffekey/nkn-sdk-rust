@@ -1,16 +1,16 @@
-use crate::signature::{get_hash_data, verify_signable_data};
 use crate::crypto::sha256_hash;
 use crate::program::Program;
 use crate::signature::SignableData;
+use crate::signature::{get_hash_data, verify_signable_data};
 
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 
 #[derive(Debug)]
 pub struct TransactionConfig {
-    fee: u64,
-    nonce: u64,
-    attributes: Vec<u8>,
+    pub fee: u64,
+    pub nonce: u64,
+    pub attributes: Vec<u8>,
 }
 
 impl Default for TransactionConfig {
@@ -23,7 +23,7 @@ impl Default for TransactionConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 enum PayloadType {
     Coinbase = 0,
     TransferAsset = 1,
@@ -60,14 +60,15 @@ impl From<u32> for PayloadType {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct PayloadData {
+pub struct PayloadData {
     r#type: PayloadType,
     data: Vec<u8>,
 }
 
 fn serialize_payload_data(payload: &PayloadData) -> Vec<u8> {
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(&(payload.r#type as u32).to_ne_bytes());
+    let type32 = payload.r#type.clone() as u32;
+    bytes.extend_from_slice(&type32.to_ne_bytes());
     bytes.extend_from_slice(&payload.data);
     bytes
 }
@@ -83,33 +84,33 @@ fn deserialize_payload_data(bytes: &[u8]) -> PayloadData {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct UnsignedTx {
-    payload: PayloadData,
-    nonce: u64,
-    fee: u64,
-    attributes: Vec<u8>,
+pub struct UnsignedTx {
+    pub payload: PayloadData,
+    pub nonce: u64,
+    pub fee: u64,
+    pub attributes: Vec<u8>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct ProgramInfo {
-    code: String,
-    parameter: String,
+    pub code: String,
+    pub parameter: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TxnInfo {
-    tx_type: String,
-    payload_data: String,
-    nonce: u64,
-    fee: u64,
-    attributes: String,
-    programs: Vec<ProgramInfo>,
-    hash: String,
+    pub tx_type: String,
+    pub payload_data: String,
+    pub nonce: u64,
+    pub fee: u64,
+    pub attributes: String,
+    pub programs: Vec<ProgramInfo>,
+    pub hash: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Transaction {
-    unsigned_tx: UnsignedTx,
+    pub unsigned_tx: UnsignedTx,
     programs: Vec<Program>,
     hash: Option<Vec<u8>>,
     size: u32,
@@ -117,7 +118,13 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    pub fn new_transfer_asset(sender: &[u8], recipient: &[u8], nonce: u64, value: u64, fee: u64) -> Self {
+    pub fn new_transfer_asset(
+        sender: &[u8],
+        recipient: &[u8],
+        nonce: u64,
+        value: u64,
+        fee: u64,
+    ) -> Self {
         todo!()
     }
 
@@ -125,11 +132,23 @@ impl Transaction {
         todo!()
     }
 
-    pub fn new_register_name(registrant: &[u8], name: &str, nonce: u64, reg_fee: u64, fee: u64) -> Self {
+    pub fn new_register_name(
+        registrant: &[u8],
+        name: &str,
+        nonce: u64,
+        reg_fee: u64,
+        fee: u64,
+    ) -> Self {
         todo!()
     }
 
-    pub fn new_transfer_name(registrant: &[u8], to: &[u8], name: &str, nonce: u64, fee: u64) -> Self {
+    pub fn new_transfer_name(
+        registrant: &[u8],
+        to: &[u8],
+        name: &str,
+        nonce: u64,
+        fee: u64,
+    ) -> Self {
         todo!()
     }
 
@@ -137,23 +156,60 @@ impl Transaction {
         todo!()
     }
 
-    pub fn new_subscribe(subscriber: &[u8], identifier: &str, topic: &str, duration: u32, meta: &str, nonce: u64, fee: u64) -> Self {
+    pub fn new_subscribe(
+        subscriber: &[u8],
+        identifier: &str,
+        topic: &str,
+        duration: u32,
+        meta: &str,
+        nonce: u64,
+        fee: u64,
+    ) -> Self {
         todo!()
     }
 
-    pub fn new_unsubscribe(subscriber: &[u8], identifier: &str, topic: &str, nonce: u64, fee: u64) -> Self {
+    pub fn new_unsubscribe(
+        subscriber: &[u8],
+        identifier: &str,
+        topic: &str,
+        nonce: u64,
+        fee: u64,
+    ) -> Self {
         todo!()
     }
 
-    pub fn new_generate_id(public_key: &[u8], sender: &[u8], reg_fee: u64, version: u32, nonce: u64, fee: u64, attributes: &[u8]) -> Self {
+    pub fn new_generate_id(
+        public_key: &[u8],
+        sender: &[u8],
+        reg_fee: u64,
+        version: u32,
+        nonce: u64,
+        fee: u64,
+        attributes: &[u8],
+    ) -> Self {
         todo!()
     }
 
-    pub fn new_nano_pay(sender: &[u8], recipient: &[u8], id: u64, amount: u64, txn_expiration: u32, nano_pay_expiration: u32) -> Self {
+    pub fn new_nano_pay(
+        sender: &[u8],
+        recipient: &[u8],
+        id: u64,
+        amount: u64,
+        txn_expiration: u32,
+        nano_pay_expiration: u32,
+    ) -> Self {
         todo!()
     }
 
-    pub fn new_issue_asset(sender: &[u8], name: &str, symbol: &str, total_supply: u64, precision: u32, nonce: u64, fee: u64) -> Self {
+    pub fn new_issue_asset(
+        sender: &[u8],
+        name: &str,
+        symbol: &str,
+        total_supply: u64,
+        precision: u32,
+        nonce: u64,
+        fee: u64,
+    ) -> Self {
         todo!()
     }
 
@@ -169,9 +225,9 @@ impl Transaction {
         get_hash_data(self)
     }
 
-    pub fn hash(&mut self) -> Vec<u8> {
-        match self.hash {
-            Some(hash) => hash,
+    pub fn hash(&self) -> Vec<u8> {
+        match &self.hash {
+            Some(hash) => hash.clone(),
             None => sha256_hash(&get_hash_data(self)),
         }
     }

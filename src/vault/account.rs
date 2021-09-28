@@ -67,8 +67,6 @@ pub fn amount_to_string(amount: u64) -> String {
 
 pub trait AccountHolder {
     fn account(&self) -> &Account;
-    fn public_key(&self) -> &[u8];
-    fn private_key(&self) -> &[u8];
     fn seed(&self) -> Vec<u8>;
     fn address(&self) -> String;
     fn program_hash(&self) -> &[u8];

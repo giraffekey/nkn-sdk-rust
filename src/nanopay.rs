@@ -1,15 +1,10 @@
+use crate::program::to_script_hash;
 use crate::rpc::RPCClient;
 use crate::transaction::Transaction;
 use crate::vault::Wallet;
 
-use base58::FromBase58;
 use rand::Rng;
 use std::time::SystemTime;
-
-fn to_script_hash(address: &str) -> Vec<u8> {
-    let hash = address.from_base58().unwrap();
-    hash[3..23].to_vec()
-}
 
 pub struct NanoPay<'a> {
     rpc_client: &'a dyn RPCClient,

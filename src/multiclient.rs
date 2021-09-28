@@ -1,11 +1,41 @@
 use crate::rpc::{RPCClient, Registrant, SignerRPCClient, Subscribers, Subscription};
+use crate::signature::Signer;
 use crate::transaction::{Transaction, TransactionConfig};
+use crate::vault::{Account, AccountHolder};
 
 use async_trait::async_trait;
 
 pub struct MultiClientConfig {}
 
 pub struct MultiClient {}
+
+impl AccountHolder for MultiClient {
+    fn account(&self) -> &Account {
+        todo!()
+    }
+
+    fn seed(&self) -> Vec<u8> {
+        todo!()
+    }
+
+    fn address(&self) -> String {
+        todo!()
+    }
+
+    fn program_hash(&self) -> &[u8] {
+        todo!()
+    }
+}
+
+impl Signer for MultiClient {
+    fn public_key(&self) -> &[u8] {
+        todo!()
+    }
+
+    fn private_key(&self) -> &[u8] {
+        todo!()
+    }
+}
 
 #[async_trait]
 impl RPCClient for MultiClient {

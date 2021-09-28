@@ -148,14 +148,6 @@ impl AccountHolder for Client {
         &self.account
     }
 
-    fn public_key(&self) -> &[u8] {
-        self.account.public_key()
-    }
-
-    fn private_key(&self) -> &[u8] {
-        self.account.private_key()
-    }
-
     fn seed(&self) -> Vec<u8> {
         self.account.seed()
     }
@@ -175,6 +167,16 @@ impl AccountHolder for Client {
 
     fn program_hash(&self) -> &[u8] {
         self.account.program_hash()
+    }
+}
+
+impl Signer for Client {
+    fn private_key(&self) -> &[u8] {
+        self.account.private_key()
+    }
+
+    fn public_key(&self) -> &[u8] {
+        self.account.public_key()
     }
 }
 

@@ -34,5 +34,5 @@ pub fn verify_signable_data<D: SignableData>(data: &D) -> bool {
 }
 
 pub fn verify_signature<D: SignableData>(data: &D, public_key: &[u8], signature: &[u8]) -> bool {
-    ed25519_verify(get_hash_for_signing(data), public_key, signature)
+    ed25519_verify(&get_hash_for_signing(data), public_key, signature)
 }

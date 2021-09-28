@@ -142,14 +142,6 @@ impl AccountHolder for Wallet {
         &self.account
     }
 
-    fn public_key(&self) -> &[u8] {
-        self.account.public_key()
-    }
-
-    fn private_key(&self) -> &[u8] {
-        self.account.private_key()
-    }
-
     fn seed(&self) -> Vec<u8> {
         self.account.seed()
     }
@@ -160,6 +152,16 @@ impl AccountHolder for Wallet {
 
     fn program_hash(&self) -> &[u8] {
         self.account.program_hash()
+    }
+}
+
+impl Signer for Wallet {
+    fn public_key(&self) -> &[u8] {
+        self.account.public_key()
+    }
+
+    fn private_key(&self) -> &[u8] {
+        self.account.private_key()
     }
 }
 
