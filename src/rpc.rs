@@ -1,4 +1,4 @@
-use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
+use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, MIN_NAME_REGISTRATION_FEE};
 use crate::program::{create_program_hash, to_script_hash};
 use crate::signature::Signer;
 use crate::transaction::{Transaction, TransactionConfig};
@@ -362,7 +362,20 @@ pub async fn register_name<S: SignerRPCClient>(
     name: &str,
     config: TransactionConfig,
 ) -> Result<String, String> {
-    todo!()
+    let nonce = if config.nonce > 0 {
+        config.nonce
+    } else {
+        s.nonce(true).await?
+    };
+
+    let mut tx = Transaction::new_register_name(s.public_key(), name, nonce, MIN_NAME_REGISTRATION_FEE, config.fee);
+
+    if config.attributes.len() > 0 {
+        tx.unsigned_tx.attributes = config.attributes;
+    }
+
+    s.sign_transaction(&mut tx);
+    s.send_raw_transaction(tx).await
 }
 
 pub async fn transfer_name<S: SignerRPCClient>(
@@ -371,7 +384,20 @@ pub async fn transfer_name<S: SignerRPCClient>(
     recipient_public_key: &[u8],
     config: TransactionConfig,
 ) -> Result<String, String> {
-    todo!()
+    let nonce = if config.nonce > 0 {
+        config.nonce
+    } else {
+        s.nonce(true).await?
+    };
+
+    let mut tx = Transaction::new_transfer_name(s.public_key(), recipient_public_key, name, nonce, config.fee);
+
+    if config.attributes.len() > 0 {
+        tx.unsigned_tx.attributes = config.attributes;
+    }
+
+    s.sign_transaction(&mut tx);
+    s.send_raw_transaction(tx).await
 }
 
 pub async fn delete_name<S: SignerRPCClient>(
@@ -379,7 +405,20 @@ pub async fn delete_name<S: SignerRPCClient>(
     name: &str,
     config: TransactionConfig,
 ) -> Result<String, String> {
-    todo!()
+    let nonce = if config.nonce > 0 {
+        config.nonce
+    } else {
+        s.nonce(true).await?
+    };
+
+    let mut tx = Transaction::new_delete_name(s.public_key(), name, nonce, config.fee);
+
+    if config.attributes.len() > 0 {
+        tx.unsigned_tx.attributes = config.attributes;
+    }
+
+    s.sign_transaction(&mut tx);
+    s.send_raw_transaction(tx).await
 }
 
 pub async fn subscribe<S: SignerRPCClient>(
@@ -390,7 +429,20 @@ pub async fn subscribe<S: SignerRPCClient>(
     meta: &str,
     config: TransactionConfig,
 ) -> Result<String, String> {
-    todo!()
+    let nonce = if config.nonce > 0 {
+        config.nonce
+    } else {
+        s.nonce(true).await?
+    };
+
+    let mut tx = Transaction::new_subscribe(s.public_key(), identifier, topic, duration, meta, nonce, config.fee);
+
+    if config.attributes.len() > 0 {
+        tx.unsigned_tx.attributes = config.attributes;
+    }
+
+    s.sign_transaction(&mut tx);
+    s.send_raw_transaction(tx).await
 }
 
 pub async fn unsubscribe<S: SignerRPCClient>(
@@ -399,7 +451,20 @@ pub async fn unsubscribe<S: SignerRPCClient>(
     topic: &str,
     config: TransactionConfig,
 ) -> Result<String, String> {
-    todo!()
+    let nonce = if config.nonce > 0 {
+        config.nonce
+    } else {
+        s.nonce(true).await?
+    };
+
+    let mut tx = Transaction::new_unsubscribe(s.public_key(), identifier, topic, nonce, config.fee);
+
+    if config.attributes.len() > 0 {
+        tx.unsigned_tx.attributes = config.attributes;
+    }
+
+    s.sign_transaction(&mut tx);
+    s.send_raw_transaction(tx).await
 }
 
 pub async fn measure_rpc_server(rpc_list: &[&str], timeout: u32) -> Result<Vec<String>, String> {
