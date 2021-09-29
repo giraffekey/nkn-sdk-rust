@@ -5,12 +5,8 @@ use serde::{Deserialize, Serialize};
 
 const SIGNATURE: u8 = 0;
 const CHECKSIG: u8 = 0xAC;
-// FOOLPROOFPREFIX used for fool-proof prefix
-// base58.BitcoinEncoding[21] = 'N', base58.BitcoinEncoding[18] = 'K'
-// 33 = len(base58.Encode( (2**192).Bytes() )),  192 = 8bit * (UINT160SIZE + SHA256CHKSUM)
-// ((21 * 58**35) + (18 * 58**34) + (21 * 58**33)) >> 192 = 0x02b824
-const FOOL_PROOF_PREFIX: u64 = 0x02b824 + 1; // +1 for avoid affected by lower 192bits shift-add
-const SHA256_CHECKSUM: usize = 4;
+const ADDRESS_GEN_PREFIX: &[u8] = &[0x02, 0xb8, 0x25];
+const CHECKSUM_LEN: usize = 4;
 
 // CODE: len(publickey) + publickey + CHECKSIG
 pub fn create_signature_program_code(public_key: &[u8]) -> Vec<u8> {
@@ -31,12 +27,12 @@ pub fn create_program_hash(public_key: &[u8]) -> Vec<u8> {
 
 pub fn code_hash_to_address(hash: &[u8]) -> String {
     let mut data = Vec::new();
-    data.extend_from_slice(&FOOL_PROOF_PREFIX.to_ne_bytes());
+    data.extend_from_slice(ADDRESS_GEN_PREFIX);
     data.extend_from_slice(hash);
 
     let temp = sha256_hash(&data);
     let temp = sha256_hash(&temp);
-    data.extend_from_slice(&temp[0..SHA256_CHECKSUM]);
+    data.extend_from_slice(&temp[0..CHECKSUM_LEN]);
 
     data.to_base58()
 }

@@ -1,4 +1,4 @@
-use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
+use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER};
 use crate::crypto::ed25519_private_key_to_curve25519_private_key;
 use crate::message::MessageConfig;
 use crate::nanopay::{NanoPay, NanoPayClaimer};
@@ -31,7 +31,10 @@ pub struct ClientConfig {
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            rpc_server_address: Vec::new(),
+            rpc_server_address: DEFAULT_SEED_RPC_SERVER
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             rpc_timeout: DEFAULT_RPC_TIMEOUT,
             rpc_concurrency: DEFAULT_RPC_CONCURRENCY,
             msg_chan_length: 1024,

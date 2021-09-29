@@ -102,19 +102,25 @@ async fn request<D: DeserializeOwned>(
     client: &Client<HttpsConnector<HttpConnector>>,
     address: &str,
     body: String,
-) -> Result<D, ()> {
+) -> Result<D, String> {
     let req = Request::builder()
         .method(Method::POST)
         .uri(address)
         .body(Body::from(body))
         .unwrap();
 
-    let res = client.request(req).await.map_err(|_| ())?;
-    let body = body::to_bytes(res.into_body()).await.map_err(|_| ())?;
-    let body_str = str::from_utf8(&body).map_err(|_| ())?;
-    let res: RPCResponse<D> = serde_json::from_str(body_str).map_err(|_| ())?;
-    if let Some(_err) = res.error {
-        return Err(());
+    let res = client
+        .request(req)
+        .await
+        .map_err(|err| format!("Client: {:?}", err))?;
+    let body = body::to_bytes(res.into_body())
+        .await
+        .map_err(|err| format!("Body: {:?}", err))?;
+    let body_str = str::from_utf8(&body).map_err(|err| format!("Body: {:?}", err))?;
+    let res: RPCResponse<D> =
+        serde_json::from_str(body_str).map_err(|err| format!("Json: {:?}", err))?;
+    if let Some(err) = res.error {
+        return Err(format!("{}: {}", err.message, err.data));
     }
     Ok(res.result.unwrap())
 }
@@ -124,6 +130,10 @@ pub async fn rpc_call<S: Serialize, D: DeserializeOwned>(
     params: S,
     config: RPCConfig,
 ) -> Result<D, String> {
+    if config.rpc_server_address.is_empty() {
+        return Err("No server addresses in config".into());
+    }
+
     let https = HttpsConnector::new();
     let client = Client::builder()
         .pool_idle_timeout(config.rpc_timeout)
@@ -136,14 +146,16 @@ pub async fn rpc_call<S: Serialize, D: DeserializeOwned>(
     })
     .to_string();
 
+    let mut err_message: Option<String> = None;
+
     for address in config.rpc_server_address {
         match request(&client, &address, body.clone()).await {
             Ok(res) => return Ok(res),
-            Err(()) => (),
+            Err(err) => err_message = Some(err),
         }
     }
 
-    Err("Requests failed".into())
+    Err(err_message.unwrap())
 }
 
 #[derive(Debug, Deserialize)]
@@ -319,7 +331,6 @@ struct Balance {
 pub async fn get_balance(address: &str, config: RPCConfig) -> Result<u64, String> {
     let balance: Balance =
         rpc_call("getbalancebyaddr", json!({ "address": address }), config).await?;
-
     Ok(balance.amount)
 }
 
@@ -368,7 +379,13 @@ pub async fn register_name<S: SignerRPCClient>(
         s.nonce(true).await?
     };
 
-    let mut tx = Transaction::new_register_name(s.public_key(), name, nonce, MIN_NAME_REGISTRATION_FEE, config.fee);
+    let mut tx = Transaction::new_register_name(
+        s.public_key(),
+        name,
+        nonce,
+        MIN_NAME_REGISTRATION_FEE,
+        config.fee,
+    );
 
     if config.attributes.len() > 0 {
         tx.unsigned_tx.attributes = config.attributes;
@@ -390,7 +407,13 @@ pub async fn transfer_name<S: SignerRPCClient>(
         s.nonce(true).await?
     };
 
-    let mut tx = Transaction::new_transfer_name(s.public_key(), recipient_public_key, name, nonce, config.fee);
+    let mut tx = Transaction::new_transfer_name(
+        s.public_key(),
+        recipient_public_key,
+        name,
+        nonce,
+        config.fee,
+    );
 
     if config.attributes.len() > 0 {
         tx.unsigned_tx.attributes = config.attributes;
@@ -435,7 +458,15 @@ pub async fn subscribe<S: SignerRPCClient>(
         s.nonce(true).await?
     };
 
-    let mut tx = Transaction::new_subscribe(s.public_key(), identifier, topic, duration, meta, nonce, config.fee);
+    let mut tx = Transaction::new_subscribe(
+        s.public_key(),
+        identifier,
+        topic,
+        duration,
+        meta,
+        nonce,
+        config.fee,
+    );
 
     if config.attributes.len() > 0 {
         tx.unsigned_tx.attributes = config.attributes;

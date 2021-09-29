@@ -1,4 +1,4 @@
-use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT};
+use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER};
 use crate::nanopay::{NanoPay, NanoPayClaimer};
 use crate::program::{create_signature_program_context, Program};
 use crate::rpc::{
@@ -38,7 +38,10 @@ impl Default for WalletConfig {
         rng.fill(&mut iv);
 
         Self {
-            rpc_server_address: Vec::new(),
+            rpc_server_address: DEFAULT_SEED_RPC_SERVER
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
             rpc_timeout: DEFAULT_RPC_TIMEOUT,
             rpc_concurrency: DEFAULT_RPC_CONCURRENCY,
             password: String::new(),
@@ -121,6 +124,10 @@ impl Wallet {
     pub fn verify_password(&self, password: &str) -> Result<bool, String> {
         let account = self.wallet_data.decrypt_account(password)?;
         Ok(account.wallet_address() == self.wallet_data.address)
+    }
+
+    pub fn verify_address(&self, address: &str) -> Result<bool, String> {
+        todo!()
     }
 
     pub fn create_nano_pay(&self, recipient_address: &str, fee: u64, duration: u32) -> NanoPay {
@@ -292,5 +299,157 @@ impl SignerRPCClient for Wallet {
         config: TransactionConfig,
     ) -> Result<String, String> {
         unsubscribe(self, identifier, topic, config).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_seed() {
+        let mut seed = [0; 32];
+        seed[4] = 5;
+        seed[16] = 212;
+        let account = Account::new(&seed);
+        assert!(account.is_ok());
+        let account = account.unwrap();
+        let public_key = account.public_key().to_vec();
+        let wallet = Wallet::new(
+            account,
+            WalletConfig {
+                password: "password".into(),
+                ..WalletConfig::default()
+            },
+        );
+        assert!(wallet.is_ok());
+        let wallet = wallet.unwrap();
+        assert_eq!(public_key, wallet.public_key());
+        assert_eq!(seed.to_vec(), wallet.seed());
+    }
+
+    #[test]
+    fn new_random() {
+        let account = Account::random();
+        assert!(account.is_ok());
+        let account = account.unwrap();
+        let public_key = account.public_key().to_vec();
+        let seed = account.seed().to_vec();
+        let wallet = Wallet::new(
+            account,
+            WalletConfig {
+                password: "password".into(),
+                ..WalletConfig::default()
+            },
+        );
+        assert!(wallet.is_ok());
+        let wallet = wallet.unwrap();
+        assert_eq!(public_key, wallet.public_key());
+        assert_eq!(seed, wallet.seed());
+    }
+
+    #[test]
+    fn json() {
+        let account = Account::random();
+        assert!(account.is_ok());
+        let account = account.unwrap();
+        let wallet = Wallet::new(
+            account,
+            WalletConfig {
+                password: "password".into(),
+                ..WalletConfig::default()
+            },
+        );
+        assert!(wallet.is_ok());
+        let wallet = wallet.unwrap();
+
+        let wallet_json = wallet.to_json();
+        let wallet2 = Wallet::from_json(
+            &wallet_json,
+            WalletConfig {
+                password: "password".into(),
+                ..WalletConfig::default()
+            },
+        );
+        assert!(wallet2.is_ok());
+        let wallet2 = wallet2.unwrap();
+        assert_eq!(wallet.public_key(), wallet2.public_key());
+        assert_eq!(wallet.private_key(), wallet2.private_key());
+        assert_eq!(wallet.seed(), wallet2.seed());
+    }
+
+    #[test]
+    fn verify_password() {
+        let account = Account::random();
+        assert!(account.is_ok());
+        let account = account.unwrap();
+        let wallet = Wallet::new(
+            account,
+            WalletConfig {
+                password: "42".into(),
+                ..WalletConfig::default()
+            },
+        );
+        assert!(wallet.is_ok());
+        let wallet = wallet.unwrap();
+
+        assert_eq!(wallet.verify_password("42"), Ok(true));
+        assert_eq!(wallet.verify_password("233"), Ok(false));
+    }
+
+    // #[test]
+    // fn verify_address() {
+    //     let account = Account::random();
+    //     assert!(account.is_ok());
+    //     let account = account.unwrap();
+    //     let wallet = Wallet::new(account, WalletConfig {
+    //         password: "42".into(),
+    //         ..WalletConfig::default()
+    //     });
+    //     assert!(wallet.is_ok());
+    //     let wallet = wallet.unwrap();
+
+    //     let address = wallet.address();
+    //     assert_eq!(wallet.verify_address(&address), Ok(true));
+    //     assert_eq!(wallet.verify_address(&address[1..4]), Ok(false));
+    //     assert_eq!(wallet.verify_address(&address[0..address.len()-1]), Ok(false));
+    // }
+
+    #[tokio::test]
+    async fn balance() {
+        let account = Account::random();
+        assert!(account.is_ok());
+        let account = account.unwrap();
+        let wallet = Wallet::new(
+            account,
+            WalletConfig {
+                password: "password".into(),
+                ..WalletConfig::default()
+            },
+        );
+        assert!(wallet.is_ok());
+        let wallet = wallet.unwrap();
+
+        let balance = wallet.balance().await;
+        assert_eq!(balance, Ok(0));
+    }
+
+    #[tokio::test]
+    async fn nonce() {
+        let account = Account::random();
+        assert!(account.is_ok());
+        let account = account.unwrap();
+        let wallet = Wallet::new(
+            account,
+            WalletConfig {
+                password: "password".into(),
+                ..WalletConfig::default()
+            },
+        );
+        assert!(wallet.is_ok());
+        let wallet = wallet.unwrap();
+
+        let nonce = wallet.nonce(true).await;
+        assert_eq!(nonce, Ok(0));
     }
 }
