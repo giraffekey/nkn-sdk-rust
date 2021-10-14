@@ -69,7 +69,7 @@ enum Payload {
         topic: String,
     },
     GenerateId {
-        public_key: Vec<u8>,
+        publickey: Vec<u8>,
         sender: Vec<u8>,
         registrationfee: u64,
         version: u32,
@@ -79,14 +79,14 @@ enum Payload {
         recipient: Vec<u8>,
         id: u64,
         amount: u64,
-        txn_expiration: u32,
-        nano_pay_expiration: u32,
+        txnexpiration: u32,
+        nanopayexpiration: u32,
     },
     IssueAsset {
         sender: Vec<u8>,
         name: String,
         symbol: String,
-        total_supply: u64,
+        totalsupply: u64,
         precision: u32,
     },
 }
@@ -198,6 +198,13 @@ pub struct TxnInfo {
     pub hash: String,
 }
 
+fn random_attrs() -> [u8; TX_NONCE_LEN] {
+    let mut rng = thread_rng();
+    let mut attrs = [0; TX_NONCE_LEN];
+    rng.fill(&mut attrs);
+    attrs
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Transaction {
     pub unsigned_tx: UnsignedTx,
@@ -208,7 +215,7 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    pub fn new(payload_data: PayloadData, nonce: u64, fee: u64, attrs: &[u8]) -> Self {
+    pub fn new(payload_data: PayloadData, nonce: u64, fee: u64, attrs: [u8; TX_NONCE_LEN]) -> Self {
         let unsigned_tx = UnsignedTx {
             payload_data,
             nonce,
@@ -239,15 +246,17 @@ impl Transaction {
         };
         let payload_data = pack_payload_data(&payload);
 
-        let mut rng = thread_rng();
-        let mut attrs = [0u8; TX_NONCE_LEN];
-        rng.fill(&mut attrs);
-
-        Self::new(payload_data, nonce, fee, &attrs)
+        Self::new(payload_data, nonce, fee, random_attrs())
     }
 
     pub fn new_sig_chain(sig_chain: &[u8], submitter: &[u8], nonce: u64) -> Self {
-        todo!()
+        let payload = Payload::SigChain {
+            sigchain: sig_chain.to_vec(),
+            submitter: submitter.to_vec(),
+        };
+        let payload_data = pack_payload_data(&payload);
+
+        Self::new(payload_data, nonce, 0, random_attrs())
     }
 
     pub fn new_register_name(
@@ -257,7 +266,14 @@ impl Transaction {
         reg_fee: u64,
         fee: u64,
     ) -> Self {
-        todo!()
+        let payload = Payload::RegisterName {
+            registrant: registrant.to_vec(),
+            name: name.into(),
+            fee: reg_fee,
+        };
+        let payload_data = pack_payload_data(&payload);
+
+        Self::new(payload_data, nonce, fee, random_attrs())
     }
 
     pub fn new_transfer_name(
@@ -267,11 +283,24 @@ impl Transaction {
         nonce: u64,
         fee: u64,
     ) -> Self {
-        todo!()
+        let payload = Payload::TransferName {
+            registrant: registrant.to_vec(),
+            recipient: to.to_vec(),
+            name: name.into(),
+        };
+        let payload_data = pack_payload_data(&payload);
+
+        Self::new(payload_data, nonce, fee, random_attrs())
     }
 
     pub fn new_delete_name(registrant: &[u8], name: &str, nonce: u64, fee: u64) -> Self {
-        todo!()
+        let payload = Payload::DeleteName {
+            registrant: registrant.to_vec(),
+            name: name.into()
+        };
+        let payload_data = pack_payload_data(&payload);
+
+        Self::new(payload_data, nonce, fee, random_attrs())
     }
 
     pub fn new_subscribe(
@@ -283,7 +312,16 @@ impl Transaction {
         nonce: u64,
         fee: u64,
     ) -> Self {
-        todo!()
+        let payload = Payload::Subscribe {
+            subscriber: subscriber.to_vec(),
+            identifier: identifier.into(),
+            topic: topic.into(),
+            duration,
+            meta: meta.into(),
+        };
+        let payload_data = pack_payload_data(&payload);
+
+        Self::new(payload_data, nonce, fee, random_attrs())
     }
 
     pub fn new_unsubscribe(
@@ -293,7 +331,14 @@ impl Transaction {
         nonce: u64,
         fee: u64,
     ) -> Self {
-        todo!()
+        let payload = Payload::Unsubscribe {
+            subscriber: subscriber.to_vec(),
+            identifier: identifier.into(),
+            topic: topic.into(),
+        };
+        let payload_data = pack_payload_data(&payload);
+
+        Self::new(payload_data, nonce, fee, random_attrs())
     }
 
     pub fn new_generate_id(
@@ -305,7 +350,15 @@ impl Transaction {
         fee: u64,
         attributes: &[u8],
     ) -> Self {
-        todo!()
+        let payload = Payload::GenerateId {
+            publickey: public_key.to_vec(),
+            sender: sender.to_vec(),
+            registrationfee: reg_fee,
+            version,
+        };
+        let payload_data = pack_payload_data(&payload);
+
+        Self::new(payload_data, nonce, fee, random_attrs())
     }
 
     pub fn new_nano_pay(
@@ -316,7 +369,17 @@ impl Transaction {
         txn_expiration: u32,
         nano_pay_expiration: u32,
     ) -> Self {
-        todo!()
+        let payload = Payload::NanoPay {
+            sender: sender.to_vec(),
+            recipient: recipient.to_vec(),
+            id,
+            amount,
+            txnexpiration: txn_expiration,
+            nanopayexpiration: nano_pay_expiration,
+        };
+        let payload_data = pack_payload_data(&payload);
+
+        Self::new(payload_data, 0, 0, random_attrs())
     }
 
     pub fn new_issue_asset(
@@ -328,7 +391,16 @@ impl Transaction {
         nonce: u64,
         fee: u64,
     ) -> Self {
-        todo!()
+        let payload = Payload::IssueAsset {
+            sender: sender.to_vec(),
+            name: name.into(),
+            symbol: symbol.into(),
+            precision,
+            totalsupply: total_supply,
+        };
+        let payload_data = pack_payload_data(&payload);
+
+        Self::new(payload_data, nonce, fee, random_attrs())
     }
 
     pub fn size(&self) -> u32 {
@@ -363,7 +435,7 @@ impl Transaction {
         self.is_signature_verified
     }
 
-    pub fn get_info(&self) -> TxnInfo {
+    pub fn info(&self) -> TxnInfo {
         todo!()
     }
 }
