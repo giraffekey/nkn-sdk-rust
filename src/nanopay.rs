@@ -1,10 +1,14 @@
 use crate::program::to_script_hash;
-use crate::rpc::RPCClient;
+use crate::rpc::{RPCClient, SignerRPCClient};
 use crate::transaction::Transaction;
-use crate::vault::Wallet;
+use crate::vault::{AccountHolder, Wallet};
 
 use rand::Rng;
 use std::time::SystemTime;
+
+const SENDER_EXPIRATION_DELTA: u32 = 5;
+const FORCE_FLUSH_DELTA: u32 = 2;
+const RECEIVER_EXPIRATION_DELTA: u32 = 3;
 
 pub struct NanoPay<'a> {
     rpc_client: &'a dyn RPCClient,
@@ -48,8 +52,23 @@ impl<'a> NanoPay<'a> {
         &self.recipient_address
     }
 
-    pub fn increment_amount(&self, delta: u64) -> Transaction {
-        todo!()
+    pub async fn increment_amount(&mut self, delta: u64) -> Result<Transaction, String> {
+        let height = self.rpc_client.height().await?;
+
+        if self.expiration == 0 || self.expiration <= height + SENDER_EXPIRATION_DELTA {
+            let mut rng = rand::thread_rng();
+            self.id = rng.gen();
+            self.expiration = height + self.duration;
+            self.amount = 0;
+        }
+
+        self.amount += delta;
+
+        let mut tx = Transaction::new_nano_pay(self.wallet.program_hash(), &self.recipient_program_hash, self.id, self.amount, self.expiration, self.expiration);
+        tx.unsigned_tx.fee = self.fee;
+        self.wallet.sign_transaction(&mut tx);
+        
+        Ok(tx)
     }
 }
 
