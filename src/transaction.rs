@@ -3,8 +3,11 @@ use crate::program::Program;
 use crate::signature::SignableData;
 use crate::signature::{get_hash_data, verify_signable_data};
 
+use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
+
+const TX_NONCE_LEN: usize = 32;
 
 #[derive(Debug)]
 pub struct TransactionConfig {
@@ -23,11 +26,76 @@ impl Default for TransactionConfig {
     }
 }
 
+#[derive(Deserialize, Serialize)]
+enum Payload {
+    Coinbase {
+        sender: Vec<u8>,
+        recipient: Vec<u8>,
+        amount: u64,
+    },
+    TransferAsset {
+        sender: Vec<u8>,
+        recipient: Vec<u8>,
+        amount: u64,
+    },
+    SigChain {
+        sigchain: Vec<u8>,
+        submitter: Vec<u8>,
+    },
+    RegisterName {
+        registrant: Vec<u8>,
+        name: String,
+        fee: u64,
+    },
+    TransferName {
+        registrant: Vec<u8>,
+        recipient: Vec<u8>,
+        name: String,
+    },
+    DeleteName {
+        registrant: Vec<u8>,
+        name: String,
+    },
+    Subscribe {
+        subscriber: Vec<u8>,
+        identifier: String,
+        topic: String,
+        duration: u32,
+        meta: String,
+    },
+    Unsubscribe {
+        subscriber: Vec<u8>,
+        identifier: String,
+        topic: String,
+    },
+    GenerateId {
+        public_key: Vec<u8>,
+        sender: Vec<u8>,
+        registrationfee: u64,
+        version: u32,
+    },
+    NanoPay {
+        sender: Vec<u8>,
+        recipient: Vec<u8>,
+        id: u64,
+        amount: u64,
+        txn_expiration: u32,
+        nano_pay_expiration: u32,
+    },
+    IssueAsset {
+        sender: Vec<u8>,
+        name: String,
+        symbol: String,
+        total_supply: u64,
+        precision: u32,
+    },
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 enum PayloadType {
     Coinbase = 0,
     TransferAsset = 1,
-    SigChainTxn = 2,
+    SigChain = 2,
     RegisterName = 3,
     TransferName = 4,
     DeleteName = 5,
@@ -44,7 +112,7 @@ impl From<u32> for PayloadType {
         match i {
             0 => Self::Coinbase,
             1 => Self::TransferAsset,
-            2 => Self::SigChainTxn,
+            2 => Self::SigChain,
             3 => Self::RegisterName,
             4 => Self::TransferName,
             5 => Self::DeleteName,
@@ -65,11 +133,33 @@ pub struct PayloadData {
     data: Vec<u8>,
 }
 
-fn serialize_payload_data(payload: &PayloadData) -> Vec<u8> {
+fn pack_payload_data(payload: &Payload) -> PayloadData {
+    let r#type = match payload {
+        Payload::Coinbase { .. } => PayloadType::Coinbase,
+        Payload::TransferAsset { .. } => PayloadType::TransferAsset,
+        Payload::SigChain { .. } => PayloadType::SigChain,
+        Payload::RegisterName { .. } => PayloadType::RegisterName,
+        Payload::TransferName { .. } => PayloadType::TransferName,
+        Payload::DeleteName { .. } => PayloadType::DeleteName,
+        Payload::Subscribe { .. } => PayloadType::Subscribe,
+        Payload::Unsubscribe { .. } => PayloadType::Unsubscribe,
+        Payload::GenerateId { .. } => PayloadType::GenerateId,
+        Payload::NanoPay { .. } => PayloadType::NanoPay,
+        Payload::IssueAsset { .. } => PayloadType::IssueAsset,
+    };
+    let data = serde_json::to_vec(payload).unwrap();
+
+    PayloadData {
+        r#type,
+        data,
+    }
+}
+
+fn serialize_payload_data(payload_data: &PayloadData) -> Vec<u8> {
     let mut bytes = Vec::new();
-    let type32 = payload.r#type.clone() as u32;
+    let type32 = payload_data.r#type.clone() as u32;
     bytes.extend_from_slice(&type32.to_ne_bytes());
-    bytes.extend_from_slice(&payload.data);
+    bytes.extend_from_slice(&payload_data.data);
     bytes
 }
 
@@ -85,7 +175,7 @@ fn deserialize_payload_data(bytes: &[u8]) -> PayloadData {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct UnsignedTx {
-    pub payload: PayloadData,
+    pub payload_data: PayloadData,
     pub nonce: u64,
     pub fee: u64,
     pub attributes: Vec<u8>,
@@ -118,14 +208,42 @@ pub struct Transaction {
 }
 
 impl Transaction {
+    pub fn new(payload_data: PayloadData, nonce: u64, fee: u64, attrs: &[u8]) -> Self {
+        let unsigned_tx = UnsignedTx {
+            payload_data,
+            nonce,
+            fee,
+            attributes: attrs.to_vec(),
+        };
+
+        Self {
+            unsigned_tx,
+            programs: Vec::new(),
+            hash: None,
+            size: 0,
+            is_signature_verified: false,
+        }
+    }
+
     pub fn new_transfer_asset(
         sender: &[u8],
         recipient: &[u8],
         nonce: u64,
-        value: u64,
+        amount: u64,
         fee: u64,
     ) -> Self {
-        todo!()
+        let payload = Payload::TransferAsset {
+            sender: sender.to_vec(),
+            recipient: recipient.to_vec(),
+            amount,
+        };
+        let payload_data = pack_payload_data(&payload);
+
+        let mut rng = thread_rng();
+        let mut attrs = [0u8; TX_NONCE_LEN];
+        rng.fill(&mut attrs);
+
+        Self::new(payload_data, nonce, fee, &attrs)
     }
 
     pub fn new_sig_chain(sig_chain: &[u8], submitter: &[u8], nonce: u64) -> Self {
@@ -233,7 +351,7 @@ impl Transaction {
     }
 
     pub fn verify_signature(&mut self) -> bool {
-        if self.unsigned_tx.payload.r#type == PayloadType::Coinbase {
+        if self.unsigned_tx.payload_data.r#type == PayloadType::Coinbase {
             return false;
         }
 
@@ -265,7 +383,7 @@ impl SignableData for Transaction {
 
     fn serialize_unsigned(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-        bytes.extend_from_slice(&serialize_payload_data(&self.unsigned_tx.payload));
+        bytes.extend_from_slice(&serialize_payload_data(&self.unsigned_tx.payload_data));
         bytes.extend_from_slice(&self.unsigned_tx.nonce.to_ne_bytes());
         bytes.extend_from_slice(&self.unsigned_tx.fee.to_ne_bytes());
         bytes.extend_from_slice(&self.unsigned_tx.attributes);
