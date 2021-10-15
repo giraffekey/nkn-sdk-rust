@@ -42,11 +42,12 @@ pub fn to_script_hash(address: &str) -> Vec<u8> {
     hash[3..23].to_vec()
 }
 
+#[derive(Debug)]
 pub struct ProgramContext {
-    code: Vec<u8>,
-    parameters: Vec<u8>,
-    program_hash: Vec<u8>,
-    owner_public_key_hash: Vec<u8>,
+    pub code: Vec<u8>,
+    pub parameters: Vec<u8>,
+    pub program_hash: Vec<u8>,
+    pub owner_public_key_hash: Vec<u8>,
 }
 
 pub fn create_signature_program_context(owner_public_key: &[u8]) -> ProgramContext {
@@ -64,8 +65,8 @@ pub fn create_signature_program_context(owner_public_key: &[u8]) -> ProgramConte
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Program {
-    code: Vec<u8>,
-    parameter: Vec<u8>,
+    pub code: Vec<u8>,
+    pub parameter: Vec<u8>,
 }
 
 impl Program {

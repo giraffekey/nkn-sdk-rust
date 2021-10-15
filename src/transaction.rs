@@ -1,5 +1,5 @@
 use crate::crypto::sha256_hash;
-use crate::program::Program;
+use crate::program::{create_program_hash, Program};
 use crate::signature::SignableData;
 use crate::signature::{get_hash_data, verify_signable_data};
 
@@ -127,6 +127,25 @@ impl From<u32> for PayloadType {
     }
 }
 
+impl ToString for PayloadType {
+    fn to_string(&self) -> String {
+        match self {
+            PayloadType::Coinbase => "COINBASE_TYPE".into(),
+            PayloadType::TransferAsset => "TRANSFER_ASSET_TYPE".into(),
+            PayloadType::SigChain => "SIG_CHAIN_TXN_TYPE".into(),
+            PayloadType::RegisterName => "REGISTER_NAME_TYPE".into(),
+            PayloadType::TransferName => "TRANSFER_NAME_TYPE".into(),
+            PayloadType::DeleteName => "DELETE_NAME_TYPE".into(),
+            PayloadType::Subscribe => "SUBSCRIBE_TYPE".into(),
+            PayloadType::Unsubscribe => "UNSUBSCRIBE_TYPE".into(),
+            PayloadType::GenerateId => "GENERATE_ID_TYPE".into(),
+            PayloadType::NanoPay => "NANO_PAY_TYPE".into(),
+            PayloadType::IssueAsset => "ISSUE_ASSET_TYPE".into(),
+            PayloadType::GenerateId2 => "GENERATE_ID_2_TYPE".into(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PayloadData {
     r#type: PayloadType,
@@ -149,10 +168,11 @@ fn pack_payload_data(payload: &Payload) -> PayloadData {
     };
     let data = serde_json::to_vec(payload).unwrap();
 
-    PayloadData {
-        r#type,
-        data,
-    }
+    PayloadData { r#type, data }
+}
+
+fn unpack_payload_data(payload_data: &PayloadData) -> Payload {
+    serde_json::from_slice(&payload_data.data).unwrap()
 }
 
 fn serialize_payload_data(payload_data: &PayloadData) -> Vec<u8> {
@@ -296,7 +316,7 @@ impl Transaction {
     pub fn new_delete_name(registrant: &[u8], name: &str, nonce: u64, fee: u64) -> Self {
         let payload = Payload::DeleteName {
             registrant: registrant.to_vec(),
-            name: name.into()
+            name: name.into(),
         };
         let payload_data = pack_payload_data(&payload);
 
@@ -436,13 +456,54 @@ impl Transaction {
     }
 
     pub fn info(&self) -> TxnInfo {
-        todo!()
+        let mut programs = Vec::new();
+
+        for program in &self.programs {
+            programs.push(ProgramInfo {
+                code: hex::encode(&program.code),
+                parameter: hex::encode(&program.parameter),
+            });
+        }
+
+        TxnInfo {
+            tx_type: self.unsigned_tx.payload_data.r#type.to_string(),
+            payload_data: hex::encode(&self.unsigned_tx.payload_data.data),
+            nonce: self.unsigned_tx.nonce,
+            fee: self.unsigned_tx.fee,
+            attributes: hex::encode(&self.unsigned_tx.attributes),
+            programs,
+            hash: hex::encode(self.hash()),
+        }
     }
 }
 
 impl SignableData for Transaction {
     fn program_hashes(&self) -> Vec<Vec<u8>> {
-        todo!()
+        let payload = unpack_payload_data(&self.unsigned_tx.payload_data);
+
+        match payload {
+            Payload::Coinbase { sender, .. } => vec![sender],
+            Payload::TransferAsset { sender, .. } => vec![sender],
+            Payload::SigChain { submitter, .. } => vec![submitter],
+            Payload::RegisterName { registrant, .. } => vec![create_program_hash(&registrant)],
+            Payload::TransferName { registrant, .. } => vec![create_program_hash(&registrant)],
+            Payload::DeleteName { registrant, .. } => vec![create_program_hash(&registrant)],
+            Payload::Subscribe { subscriber, .. } => vec![create_program_hash(&subscriber)],
+            Payload::Unsubscribe { subscriber, .. } => vec![create_program_hash(&subscriber)],
+            Payload::GenerateId {
+                sender, publickey, ..
+            } => {
+                let program_hash = if !sender.is_empty() {
+                    sender
+                } else {
+                    create_program_hash(&publickey)
+                };
+
+                vec![program_hash]
+            }
+            Payload::NanoPay { sender, .. } => vec![sender],
+            Payload::IssueAsset { sender, .. } => vec![sender],
+        }
     }
 
     fn programs(&self) -> &[Program] {

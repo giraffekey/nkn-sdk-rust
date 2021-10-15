@@ -64,7 +64,14 @@ impl<'a> NanoPay<'a> {
 
         self.amount += delta;
 
-        let mut tx = Transaction::new_nano_pay(self.wallet.program_hash(), &self.recipient_program_hash, self.id, self.amount, self.expiration, self.expiration);
+        let mut tx = Transaction::new_nano_pay(
+            self.wallet.program_hash(),
+            &self.recipient_program_hash,
+            self.id,
+            self.amount,
+            self.expiration,
+            self.expiration,
+        );
         tx.unsigned_tx.fee = self.fee;
         self.wallet.sign_transaction(&mut tx);
 
