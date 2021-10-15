@@ -1,6 +1,6 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER};
 use crate::nanopay::{NanoPay, NanoPayClaimer};
-use crate::program::{create_signature_program_context, Program};
+use crate::program::{create_signature_program_context, to_script_hash, Program};
 use crate::rpc::{
     delete_name, get_balance, get_height, get_nonce, get_registrant, get_subscribers,
     get_subscribers_count, get_subscription, register_name, send_raw_transaction, subscribe,
@@ -109,6 +109,10 @@ impl Wallet {
         })
     }
 
+    pub fn verify_address(address: &str) -> bool {
+        to_script_hash(address).is_ok()
+    }
+
     pub fn to_json(&self) -> String {
         serde_json::to_string(&self.wallet_data).unwrap()
     }
@@ -126,11 +130,12 @@ impl Wallet {
         Ok(account.wallet_address() == self.wallet_data.address)
     }
 
-    pub fn verify_address(&self, address: &str) -> Result<bool, String> {
-        todo!()
-    }
-
-    pub fn create_nano_pay(&self, recipient_address: &str, fee: u64, duration: u32) -> NanoPay {
+    pub fn create_nano_pay(
+        &self,
+        recipient_address: &str,
+        fee: u64,
+        duration: u32,
+    ) -> Result<NanoPay, String> {
         NanoPay::new(self, self, recipient_address, fee, duration)
     }
 
@@ -139,7 +144,7 @@ impl Wallet {
         recipient_address: &str,
         claim_interval_ms: u32,
         min_flush_amount: u64,
-    ) -> NanoPayClaimer {
+    ) -> Result<NanoPayClaimer, String> {
         NanoPayClaimer::new(self, recipient_address, claim_interval_ms, min_flush_amount)
     }
 }
@@ -397,23 +402,30 @@ mod tests {
         assert_eq!(wallet.verify_password("233"), Ok(false));
     }
 
-    // #[test]
-    // fn verify_address() {
-    //     let account = Account::random();
-    //     assert!(account.is_ok());
-    //     let account = account.unwrap();
-    //     let wallet = Wallet::new(account, WalletConfig {
-    //         password: "42".into(),
-    //         ..WalletConfig::default()
-    //     });
-    //     assert!(wallet.is_ok());
-    //     let wallet = wallet.unwrap();
+    #[test]
+    fn verify_address() {
+        let account = Account::random();
+        assert!(account.is_ok());
+        let account = account.unwrap();
+        let wallet = Wallet::new(
+            account,
+            WalletConfig {
+                password: "42".into(),
+                ..WalletConfig::default()
+            },
+        );
+        assert!(wallet.is_ok());
+        let wallet = wallet.unwrap();
 
-    //     let address = wallet.address();
-    //     assert_eq!(wallet.verify_address(&address), Ok(true));
-    //     assert_eq!(wallet.verify_address(&address[1..4]), Ok(false));
-    //     assert_eq!(wallet.verify_address(&address[0..address.len()-1]), Ok(false));
-    // }
+        let address = wallet.address();
+        println!("{:?}", address);
+        assert_eq!(Wallet::verify_address(&address), true);
+        assert_eq!(Wallet::verify_address(&address[1..4]), false);
+        assert_eq!(
+            Wallet::verify_address(&address[0..address.len() - 1]),
+            false
+        );
+    }
 
     #[tokio::test]
     async fn balance() {

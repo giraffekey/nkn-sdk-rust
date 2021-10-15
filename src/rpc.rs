@@ -350,7 +350,7 @@ pub async fn transfer<S: SignerRPCClient>(
     config: TransactionConfig,
 ) -> Result<String, String> {
     let sender = create_program_hash(s.public_key());
-    let recipient = to_script_hash(address);
+    let recipient = to_script_hash(address)?;
 
     let nonce = if config.nonce > 0 {
         config.nonce

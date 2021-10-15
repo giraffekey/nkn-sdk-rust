@@ -29,13 +29,13 @@ impl<'a> NanoPay<'a> {
         recipient_address: &str,
         fee: u64,
         duration: u32,
-    ) -> Self {
-        let recipient_program_hash = to_script_hash(recipient_address);
+    ) -> Result<Self, String> {
+        let recipient_program_hash = to_script_hash(recipient_address)?;
 
         let mut rng = thread_rng();
         let id = rng.gen();
 
-        Self {
+        Ok(Self {
             rpc_client,
             wallet,
             recipient_address: recipient_address.into(),
@@ -45,7 +45,7 @@ impl<'a> NanoPay<'a> {
             amount: 0,
             expiration: 0,
             id,
-        }
+        })
     }
 
     pub fn recipient(&self) -> &str {
@@ -100,8 +100,8 @@ impl<'a> NanoPayClaimer<'a> {
         recipient_address: &str,
         claim_intervals_ms: u32,
         min_flush_amount: u64,
-    ) -> Self {
-        let recipient_program_hash = to_script_hash(recipient_address);
+    ) -> Result<Self, String> {
+        let recipient_program_hash = to_script_hash(recipient_address)?;
 
         let this = Self {
             rpc_client,
@@ -120,7 +120,7 @@ impl<'a> NanoPayClaimer<'a> {
 
         todo!()
 
-        // this
+        // Ok(this)
     }
 
     pub fn recipient(&self) -> &str {
