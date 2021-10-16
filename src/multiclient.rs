@@ -47,11 +47,11 @@ impl RPCClient for MultiClient {
         todo!()
     }
 
-    async fn balance(&self) -> Result<u64, String> {
+    async fn balance(&self) -> Result<i64, String> {
         todo!()
     }
 
-    async fn balance_by_address(&self, address: &str) -> Result<u64, String> {
+    async fn balance_by_address(&self, address: &str) -> Result<i64, String> {
         todo!()
     }
 
@@ -100,7 +100,7 @@ impl SignerRPCClient for MultiClient {
     async fn transfer(
         &self,
         address: &str,
-        amount: u64,
+        amount: i64,
         config: TransactionConfig,
     ) -> Result<String, String> {
         todo!()

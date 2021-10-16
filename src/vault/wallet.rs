@@ -133,7 +133,7 @@ impl Wallet {
     pub fn create_nano_pay(
         &self,
         recipient_address: &str,
-        fee: u64,
+        fee: i64,
         duration: u32,
     ) -> Result<NanoPay, String> {
         NanoPay::new(self, self, recipient_address, fee, duration)
@@ -143,7 +143,7 @@ impl Wallet {
         &self,
         recipient_address: &str,
         claim_interval_ms: u32,
-        min_flush_amount: u64,
+        min_flush_amount: i64,
     ) -> Result<NanoPayClaimer, String> {
         NanoPayClaimer::new(self, recipient_address, claim_interval_ms, min_flush_amount)
     }
@@ -195,11 +195,11 @@ impl RPCClient for Wallet {
         get_nonce(address, tx_pool, config_to_rpc_config(&self.config)).await
     }
 
-    async fn balance(&self) -> Result<u64, String> {
+    async fn balance(&self) -> Result<i64, String> {
         self.balance_by_address(&self.address()).await
     }
 
-    async fn balance_by_address(&self, address: &str) -> Result<u64, String> {
+    async fn balance_by_address(&self, address: &str) -> Result<i64, String> {
         get_balance(address, config_to_rpc_config(&self.config)).await
     }
 
@@ -263,7 +263,7 @@ impl SignerRPCClient for Wallet {
     async fn transfer(
         &self,
         address: &str,
-        amount: u64,
+        amount: i64,
         config: TransactionConfig,
     ) -> Result<String, String> {
         transfer(self, address, amount, config).await

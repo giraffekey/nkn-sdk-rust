@@ -14,8 +14,8 @@ use std::{collections::HashMap, str, time::Duration};
 pub trait RPCClient {
     async fn nonce(&self, tx_pool: bool) -> Result<u64, String>;
     async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> Result<u64, String>;
-    async fn balance(&self) -> Result<u64, String>;
-    async fn balance_by_address(&self, address: &str) -> Result<u64, String>;
+    async fn balance(&self) -> Result<i64, String>;
+    async fn balance_by_address(&self, address: &str) -> Result<i64, String>;
     async fn height(&self) -> Result<u32, String>;
     async fn subscribers(
         &self,
@@ -41,7 +41,7 @@ pub trait SignerRPCClient: Signer + RPCClient {
     async fn transfer(
         &self,
         address: &str,
-        amount: u64,
+        amount: i64,
         config: TransactionConfig,
     ) -> Result<String, String>;
     async fn register_name(&self, name: &str, config: TransactionConfig) -> Result<String, String>;
@@ -325,10 +325,10 @@ pub async fn get_nonce(address: &str, tx_pool: bool, config: RPCConfig) -> Resul
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Balance {
-    pub amount: u64,
+    pub amount: i64,
 }
 
-pub async fn get_balance(address: &str, config: RPCConfig) -> Result<u64, String> {
+pub async fn get_balance(address: &str, config: RPCConfig) -> Result<i64, String> {
     let balance: Balance =
         rpc_call("getbalancebyaddr", json!({ "address": address }), config).await?;
     Ok(balance.amount)
@@ -346,7 +346,7 @@ pub async fn send_raw_transaction(tx: Transaction, config: RPCConfig) -> Result<
 pub async fn transfer<S: SignerRPCClient>(
     s: &S,
     address: &str,
-    amount: u64,
+    amount: i64,
     config: TransactionConfig,
 ) -> Result<String, String> {
     let sender = create_program_hash(s.public_key());

@@ -15,10 +15,10 @@ pub struct NanoPay<'a> {
     wallet: &'a Wallet,
     recipient_address: String,
     recipient_program_hash: Vec<u8>,
-    fee: u64,
+    fee: i64,
     duration: u32,
     id: u64,
-    amount: u64,
+    amount: i64,
     expiration: u32,
 }
 
@@ -27,7 +27,7 @@ impl<'a> NanoPay<'a> {
         rpc_client: &'a dyn RPCClient,
         wallet: &'a Wallet,
         recipient_address: &str,
-        fee: u64,
+        fee: i64,
         duration: u32,
     ) -> Result<Self, String> {
         let recipient_program_hash = to_script_hash(recipient_address)?;
@@ -52,7 +52,7 @@ impl<'a> NanoPay<'a> {
         &self.recipient_address
     }
 
-    pub async fn increment_amount(&mut self, delta: u64) -> Result<Transaction, String> {
+    pub async fn increment_amount(&mut self, delta: i64) -> Result<Transaction, String> {
         let height = self.rpc_client.height().await?;
 
         if self.expiration == 0 || self.expiration <= height + SENDER_EXPIRATION_DELTA {
@@ -83,13 +83,13 @@ pub struct NanoPayClaimer<'a> {
     rpc_client: &'a dyn RPCClient,
     recipient_address: String,
     recipient_program_hash: Vec<u8>,
-    min_flush_amount: u64,
-    amount: u64,
+    min_flush_amount: i64,
+    amount: i64,
     closed: bool,
     expiration: u32,
     last_claim_time: SystemTime,
-    prev_claimed_amount: u64,
-    prev_flush_amount: u64,
+    prev_claimed_amount: i64,
+    prev_flush_amount: i64,
     id: Option<u64>,
     tx: Option<Transaction>,
 }
@@ -99,7 +99,7 @@ impl<'a> NanoPayClaimer<'a> {
         rpc_client: &'a dyn RPCClient,
         recipient_address: &str,
         claim_intervals_ms: u32,
-        min_flush_amount: u64,
+        min_flush_amount: i64,
     ) -> Result<Self, String> {
         let recipient_program_hash = to_script_hash(recipient_address)?;
 
@@ -127,7 +127,7 @@ impl<'a> NanoPayClaimer<'a> {
         &self.recipient_address
     }
 
-    pub fn amount(&self) -> u64 {
+    pub fn amount(&self) -> i64 {
         todo!()
     }
 
@@ -143,7 +143,7 @@ impl<'a> NanoPayClaimer<'a> {
         todo!()
     }
 
-    pub fn claim(&self, tx: Transaction) -> u64 {
+    pub fn claim(&self, tx: Transaction) -> i64 {
         todo!()
     }
 }

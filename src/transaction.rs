@@ -11,7 +11,7 @@ const TX_NONCE_LEN: usize = 32;
 
 #[derive(Debug)]
 pub struct TransactionConfig {
-    pub fee: u64,
+    pub fee: i64,
     pub nonce: u64,
     pub attributes: Vec<u8>,
 }
@@ -31,12 +31,12 @@ enum Payload {
     Coinbase {
         sender: Vec<u8>,
         recipient: Vec<u8>,
-        amount: u64,
+        amount: i64,
     },
     TransferAsset {
         sender: Vec<u8>,
         recipient: Vec<u8>,
-        amount: u64,
+        amount: i64,
     },
     SigChain {
         sigchain: Vec<u8>,
@@ -45,7 +45,7 @@ enum Payload {
     RegisterName {
         registrant: Vec<u8>,
         name: String,
-        fee: u64,
+        fee: i64,
     },
     TransferName {
         registrant: Vec<u8>,
@@ -71,14 +71,14 @@ enum Payload {
     GenerateId {
         publickey: Vec<u8>,
         sender: Vec<u8>,
-        registrationfee: u64,
+        registrationfee: i64,
         version: u32,
     },
     NanoPay {
         sender: Vec<u8>,
         recipient: Vec<u8>,
         id: u64,
-        amount: u64,
+        amount: i64,
         txnexpiration: u32,
         nanopayexpiration: u32,
     },
@@ -86,7 +86,7 @@ enum Payload {
         sender: Vec<u8>,
         name: String,
         symbol: String,
-        totalsupply: u64,
+        totalsupply: i64,
         precision: u32,
     },
 }
@@ -197,7 +197,7 @@ fn deserialize_payload_data(bytes: &[u8]) -> PayloadData {
 pub struct UnsignedTx {
     pub payload_data: PayloadData,
     pub nonce: u64,
-    pub fee: u64,
+    pub fee: i64,
     pub attributes: Vec<u8>,
 }
 
@@ -212,7 +212,7 @@ pub struct TxnInfo {
     pub tx_type: String,
     pub payload_data: String,
     pub nonce: u64,
-    pub fee: u64,
+    pub fee: i64,
     pub attributes: String,
     pub programs: Vec<ProgramInfo>,
     pub hash: String,
@@ -235,7 +235,7 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    pub fn new(payload_data: PayloadData, nonce: u64, fee: u64, attrs: [u8; TX_NONCE_LEN]) -> Self {
+    pub fn new(payload_data: PayloadData, nonce: u64, fee: i64, attrs: [u8; TX_NONCE_LEN]) -> Self {
         let unsigned_tx = UnsignedTx {
             payload_data,
             nonce,
@@ -256,8 +256,8 @@ impl Transaction {
         sender: &[u8],
         recipient: &[u8],
         nonce: u64,
-        amount: u64,
-        fee: u64,
+        amount: i64,
+        fee: i64,
     ) -> Self {
         let payload = Payload::TransferAsset {
             sender: sender.to_vec(),
@@ -283,8 +283,8 @@ impl Transaction {
         registrant: &[u8],
         name: &str,
         nonce: u64,
-        reg_fee: u64,
-        fee: u64,
+        reg_fee: i64,
+        fee: i64,
     ) -> Self {
         let payload = Payload::RegisterName {
             registrant: registrant.to_vec(),
@@ -301,7 +301,7 @@ impl Transaction {
         to: &[u8],
         name: &str,
         nonce: u64,
-        fee: u64,
+        fee: i64,
     ) -> Self {
         let payload = Payload::TransferName {
             registrant: registrant.to_vec(),
@@ -313,7 +313,7 @@ impl Transaction {
         Self::new(payload_data, nonce, fee, random_attrs())
     }
 
-    pub fn new_delete_name(registrant: &[u8], name: &str, nonce: u64, fee: u64) -> Self {
+    pub fn new_delete_name(registrant: &[u8], name: &str, nonce: u64, fee: i64) -> Self {
         let payload = Payload::DeleteName {
             registrant: registrant.to_vec(),
             name: name.into(),
@@ -330,7 +330,7 @@ impl Transaction {
         duration: u32,
         meta: &str,
         nonce: u64,
-        fee: u64,
+        fee: i64,
     ) -> Self {
         let payload = Payload::Subscribe {
             subscriber: subscriber.to_vec(),
@@ -349,7 +349,7 @@ impl Transaction {
         identifier: &str,
         topic: &str,
         nonce: u64,
-        fee: u64,
+        fee: i64,
     ) -> Self {
         let payload = Payload::Unsubscribe {
             subscriber: subscriber.to_vec(),
@@ -364,10 +364,10 @@ impl Transaction {
     pub fn new_generate_id(
         public_key: &[u8],
         sender: &[u8],
-        reg_fee: u64,
+        reg_fee: i64,
         version: u32,
         nonce: u64,
-        fee: u64,
+        fee: i64,
         attributes: &[u8],
     ) -> Self {
         let payload = Payload::GenerateId {
@@ -385,7 +385,7 @@ impl Transaction {
         sender: &[u8],
         recipient: &[u8],
         id: u64,
-        amount: u64,
+        amount: i64,
         txn_expiration: u32,
         nano_pay_expiration: u32,
     ) -> Self {
@@ -406,10 +406,10 @@ impl Transaction {
         sender: &[u8],
         name: &str,
         symbol: &str,
-        total_supply: u64,
+        total_supply: i64,
         precision: u32,
         nonce: u64,
-        fee: u64,
+        fee: i64,
     ) -> Self {
         let payload = Payload::IssueAsset {
             sender: sender.to_vec(),

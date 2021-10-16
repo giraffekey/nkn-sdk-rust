@@ -132,7 +132,7 @@ impl Client {
         todo!()
     }
 
-    pub fn create_nano_pay(&self, recipient_address: &str, fee: &str, duration: u32) -> NanoPay {
+    pub fn create_nano_pay(&self, recipient_address: &str, fee: i64, duration: u32) -> NanoPay {
         todo!()
     }
 
@@ -140,7 +140,7 @@ impl Client {
         &self,
         recipient_address: &str,
         claim_interval_ms: u32,
-        min_flush_amount: u64,
+        min_flush_amount: i64,
     ) -> NanoPayClaimer {
         todo!()
     }
@@ -201,11 +201,11 @@ impl RPCClient for Client {
         todo!()
     }
 
-    async fn balance(&self) -> Result<u64, String> {
+    async fn balance(&self) -> Result<i64, String> {
         self.balance_by_address(&self.wallet.address()).await
     }
 
-    async fn balance_by_address(&self, address: &str) -> Result<u64, String> {
+    async fn balance_by_address(&self, address: &str) -> Result<i64, String> {
         let wallet_config = self.wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
             get_balance(address, config_to_rpc_config(&self.config)).await
@@ -259,7 +259,7 @@ impl SignerRPCClient for Client {
     async fn transfer(
         &self,
         address: &str,
-        amount: u64,
+        amount: i64,
         config: TransactionConfig,
     ) -> Result<String, String> {
         todo!()
