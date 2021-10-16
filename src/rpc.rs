@@ -8,7 +8,12 @@ use hyper::{body, client::HttpConnector, Body, Client, Method, Request};
 use hyper_tls::HttpsConnector;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::{json, Value as JsonValue};
-use std::{collections::HashMap, str, time::Duration};
+use std::{
+    collections::HashMap,
+    str,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 #[async_trait]
 pub trait RPCClient {
@@ -125,7 +130,7 @@ async fn request<D: DeserializeOwned>(
     Ok(res.result.unwrap())
 }
 
-pub async fn rpc_call<S: Serialize, D: DeserializeOwned>(
+pub async fn rpc_call<S: Serialize, D: DeserializeOwned + Send + 'static>(
     method: &str,
     params: S,
     config: RPCConfig,
@@ -146,16 +151,49 @@ pub async fn rpc_call<S: Serialize, D: DeserializeOwned>(
     })
     .to_string();
 
-    let mut err_message: Option<String> = None;
+    let result: Arc<Mutex<Result<D, String>>> = Arc::new(Mutex::new(Err("couldn't find".into())));
 
-    for address in config.rpc_server_address {
-        match request(&client, &address, body.clone()).await {
-            Ok(res) => return Ok(res),
-            Err(err) => err_message = Some(err),
-        }
+    let n = if config.rpc_concurrency > 0 {
+        config.rpc_concurrency as usize
+    } else {
+        config.rpc_server_address.len()
+    };
+
+    let mut join_handles = Vec::new();
+
+    for i in 0..n {
+        let (left, right) = config
+            .rpc_server_address
+            .split_at(i % config.rpc_server_address.len());
+        let addresses = [right, left].concat();
+        let result = result.clone();
+        let client = client.clone();
+        let body = body.clone();
+
+        join_handles.push(tokio::spawn(async move {
+            for address in &addresses {
+                if result.lock().unwrap().is_ok() {
+                    return;
+                }
+
+                let res = request(&client, &address, body.clone()).await;
+
+                let mut lock = result.lock().unwrap();
+                if lock.is_err() {
+                    *lock = res;
+                }
+            }
+        }));
     }
 
-    Err(err_message.unwrap())
+    for join_handle in join_handles.drain(..) {
+        join_handle.await.unwrap();
+    }
+
+    Arc::try_unwrap(result)
+        .map_err(|_| "couldn't unwrap")?
+        .into_inner()
+        .unwrap()
 }
 
 #[derive(Debug, Deserialize)]
