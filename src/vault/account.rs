@@ -1,7 +1,7 @@
+use crate::constant::{MAXIMUM_PRECISION, STORAGE_FACTOR};
 use crate::crypto::{ed25519_keypair, ed25519_seed_from_private_key};
 use crate::program::{code_hash_to_address, create_program_hash};
 use crate::signature::Signer;
-use crate::constant::{MAXIMUM_PRECISION, STORAGE_FACTOR};
 
 use rand::Rng;
 
@@ -69,7 +69,7 @@ pub fn string_to_amount(s: &str) -> Result<i64, String> {
         }
 
         result.push_str(&s[..di]);
-        result.push_str(&s[di+1..]);
+        result.push_str(&s[di + 1..]);
 
         for _ in 0..(MAXIMUM_PRECISION - precision) {
             result.push('0');
@@ -94,8 +94,8 @@ pub fn amount_to_string(amount: i64) -> String {
         -amount
     };
 
-    result.push_str((value/STORAGE_FACTOR).to_string().as_str());
-    
+    result.push_str((value / STORAGE_FACTOR).to_string().as_str());
+
     let value = value % STORAGE_FACTOR;
 
     if value > 0 {
@@ -130,7 +130,10 @@ mod tests {
         assert_eq!(string_to_amount("101.56"), Ok(101_5600_0000));
         assert_eq!(string_to_amount("10123.45678"), Ok(10123_4567_8000));
         assert_eq!(string_to_amount("123456"), Ok(123456_0000_0000));
-        assert_eq!(string_to_amount("1.2345678901"), Err("unsupported precision".into()));
+        assert_eq!(
+            string_to_amount("1.2345678901"),
+            Err("unsupported precision".into())
+        );
         assert_eq!(string_to_amount("1234e5"), Err("parse error".into()));
     }
 
@@ -138,9 +141,15 @@ mod tests {
     fn amount_to_string_works() {
         assert_eq!(amount_to_string(100_0000_0000), "100".to_string());
         assert_eq!(amount_to_string(101_5600_0000), "101.56000000".to_string());
-        assert_eq!(amount_to_string(10123_4567_8000), "10123.45678000".to_string());
+        assert_eq!(
+            amount_to_string(10123_4567_8000),
+            "10123.45678000".to_string()
+        );
         assert_eq!(amount_to_string(123456_0000_0000), "123456".to_string());
         assert_eq!(amount_to_string(123_4567_8901), "123.45678901".to_string());
-        assert_eq!(amount_to_string(-123_4500_0000), "-123.45000000".to_string());
+        assert_eq!(
+            amount_to_string(-123_4500_0000),
+            "-123.45000000".to_string()
+        );
     }
 }
