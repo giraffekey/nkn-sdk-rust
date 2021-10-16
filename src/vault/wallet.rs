@@ -1,5 +1,5 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER};
-use crate::nanopay::{NanoPay, NanoPayClaimer};
+use crate::nano_pay::{NanoPay, NanoPayClaimer};
 use crate::program::{create_signature_program_context, to_script_hash, Program};
 use crate::rpc::{
     delete_name, get_balance, get_height, get_nonce, get_registrant, get_subscribers,
@@ -12,7 +12,7 @@ use crate::transaction::{Transaction, TransactionConfig};
 use crate::vault::data::{
     WalletData, IV_LEN, MAX_COMPATIBLE_WALLET_VERSION, MIN_COMPATIBLE_WALLET_VERSION,
 };
-use crate::vault::{Account, AccountHolder, ScryptConfig};
+use crate::vault::{string_to_amount, Account, AccountHolder, ScryptConfig};
 
 use async_trait::async_trait;
 use rand::Rng;
@@ -428,6 +428,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nonce() {
+        let account = Account::random();
+        assert!(account.is_ok());
+        let account = account.unwrap();
+        let wallet = Wallet::new(
+            account,
+            WalletConfig {
+                password: "password".into(),
+                ..WalletConfig::default()
+            },
+        );
+        assert!(wallet.is_ok());
+        let wallet = wallet.unwrap();
+
+        let nonce = wallet.nonce(true).await;
+        assert_eq!(nonce, Ok(0));
+    }
+
+    #[tokio::test]
     async fn balance() {
         let account = Account::random();
         assert!(account.is_ok());
@@ -447,7 +466,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn nonce() {
+    async fn signer_rpc_methods() {
         let account = Account::random();
         assert!(account.is_ok());
         let account = account.unwrap();
@@ -461,7 +480,68 @@ mod tests {
         assert!(wallet.is_ok());
         let wallet = wallet.unwrap();
 
-        let nonce = wallet.nonce(true).await;
-        assert_eq!(nonce, Ok(0));
+        assert!(wallet
+            .transfer(
+                &wallet.address(),
+                string_to_amount("100").unwrap(),
+                TransactionConfig::default()
+            )
+            .await
+            .is_ok());
+
+        assert!(wallet
+            .register_name("somename", TransactionConfig::default())
+            .await
+            .is_ok());
+
+        assert!(wallet
+            .transfer_name(
+                "somename",
+                wallet.public_key(),
+                TransactionConfig::default()
+            )
+            .await
+            .is_ok());
+
+        assert!(wallet
+            .delete_name("somename", TransactionConfig::default())
+            .await
+            .is_ok());
+
+        assert!(wallet
+            .subscribe(
+                "identifier",
+                "topic",
+                10,
+                "meta",
+                TransactionConfig::default()
+            )
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn nano_pay() {
+        let account = Account::random();
+        assert!(account.is_ok());
+        let account = account.unwrap();
+        let wallet = Wallet::new(
+            account,
+            WalletConfig {
+                password: "password".into(),
+                ..WalletConfig::default()
+            },
+        );
+        assert!(wallet.is_ok());
+        let wallet = wallet.unwrap();
+
+        let np = wallet.create_nano_pay(&wallet.address(), string_to_amount("0").unwrap(), 200);
+        assert!(np.is_ok());
+        let mut np = np.unwrap();
+
+        assert!(np
+            .increment_amount(string_to_amount("100").unwrap())
+            .await
+            .is_ok());
     }
 }

@@ -1,7 +1,7 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER};
 use crate::crypto::ed25519_private_key_to_curve25519_private_key;
 use crate::message::MessageConfig;
-use crate::nanopay::{NanoPay, NanoPayClaimer};
+use crate::nano_pay::{NanoPay, NanoPayClaimer};
 use crate::rpc::{
     get_balance, Node, RPCClient, RPCConfig, Registrant, SignerRPCClient, Subscribers, Subscription,
 };

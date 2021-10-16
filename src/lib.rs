@@ -1,7 +1,7 @@
 pub mod client;
 pub mod message;
 pub mod multiclient;
-pub mod nanopay;
+pub mod nano_pay;
 pub mod rpc;
 pub mod transaction;
 pub mod vault;
