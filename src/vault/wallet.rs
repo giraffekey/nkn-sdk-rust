@@ -485,44 +485,49 @@ mod tests {
         assert!(wallet.is_ok());
         let wallet = wallet.unwrap();
 
-        assert!(wallet
+        let res = wallet
             .transfer(
                 &wallet.address(),
                 string_to_amount("100").unwrap(),
-                TransactionConfig::default()
+                TransactionConfig::default(),
             )
-            .await
-            .is_ok());
+            .await;
+        println!("{:?}", res);
+        assert!(res.is_ok());
 
-        assert!(wallet
+        let res = wallet
             .register_name("somename", TransactionConfig::default())
-            .await
-            .is_ok());
+            .await;
+        println!("{:?}", res);
+        assert!(res.is_ok());
 
-        assert!(wallet
+        let res = wallet
             .transfer_name(
                 "somename",
                 wallet.public_key(),
-                TransactionConfig::default()
+                TransactionConfig::default(),
             )
-            .await
-            .is_ok());
+            .await;
+        println!("{:?}", res);
+        assert!(res.is_ok());
 
-        assert!(wallet
+        let res = wallet
             .delete_name("somename", TransactionConfig::default())
-            .await
-            .is_ok());
+            .await;
+        println!("{:?}", res);
+        assert!(res.is_ok());
 
-        assert!(wallet
+        let res = wallet
             .subscribe(
                 "identifier",
                 "topic",
                 10,
                 "meta",
-                TransactionConfig::default()
+                TransactionConfig::default(),
             )
-            .await
-            .is_ok());
+            .await;
+        println!("{:?}", res);
+        assert!(res.is_ok());
     }
 
     #[tokio::test]
@@ -544,9 +549,8 @@ mod tests {
         assert!(np.is_ok());
         let mut np = np.unwrap();
 
-        assert!(np
-            .increment_amount(string_to_amount("100").unwrap())
-            .await
-            .is_ok());
+        let res = np.increment_amount(string_to_amount("100").unwrap()).await;
+        println!("{:?}", res);
+        assert!(res.is_ok());
     }
 }
