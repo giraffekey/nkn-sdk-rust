@@ -11,7 +11,7 @@ use serde_json::{json, Value as JsonValue};
 use std::{
     collections::HashMap,
     str,
-    sync::{Arc, Mutex},
+    sync::{mpsc, Arc, Mutex},
     time::Duration,
 };
 use tokio::task;
@@ -211,6 +211,25 @@ pub async fn get_ws_address(client_address: &str, config: RPCConfig) -> Result<N
 
 pub async fn get_wss_address(client_address: &str, config: RPCConfig) -> Result<Node, String> {
     rpc_call("getwssaddr", json!({ "address": client_address }), config).await
+}
+
+#[derive(Debug)]
+pub enum SyncState {
+    WaitForSyncing = 0,
+    SyncStarted = 1,
+    SyncFinished = 2,
+    PersistFinished = 3,
+}
+
+impl ToString for SyncState {
+    fn to_string(&self) -> String {
+        match self {
+            WaitForSyncing => "WAIT_FOR_SYNCING".into(),
+            SyncStarted => "SYNC_STARTED".into(),
+            SyncFinished => "SYNC_FINISHED".into(),
+            PersistFinished => "PERSIST_FINISHED".into(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -537,6 +556,42 @@ pub async fn unsubscribe<S: SignerRPCClient>(
     s.send_raw_transaction(&tx).await
 }
 
-pub async fn measure_rpc_server(rpc_list: &[&str], timeout: u32) -> Result<Vec<String>, String> {
-    todo!()
+pub async fn measure_rpc_server(rpc_list: &[&str], timeout: Duration) -> Result<Vec<String>, String> {
+    let (tx, rx) = mpsc::channel();
+
+    for address in rpc_list {
+        let timeout = timeout.clone();
+        let address = address.to_string();
+        let tx = tx.clone();
+
+        task::spawn(async move {
+            let node_state = match get_node_state(RPCConfig {
+                rpc_server_address: vec![address.clone()],
+                rpc_timeout: timeout,
+                ..RPCConfig::default()
+            }).await {
+                Ok(node_state) => node_state,
+                Err(err) => {
+                    tx.send(None).unwrap();
+                    return;
+                }
+            };
+
+            if node_state.sync_state == SyncState::PersistFinished.to_string() {
+                tx.send(Some(address)).unwrap();
+            } else {
+                tx.send(None).unwrap();
+            }
+        });
+    }
+
+    let mut rpc_addrs = Vec::new();
+
+    for _ in 0..rpc_list.len() {
+        if let Some(address) = rx.recv().unwrap() {
+            rpc_addrs.push(address);
+        }
+    }
+
+    Ok(rpc_addrs)
 }
