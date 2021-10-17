@@ -136,7 +136,13 @@ impl Wallet {
         fee: i64,
         duration: u64,
     ) -> Result<NanoPay, String> {
-        NanoPay::new(config_to_rpc_config(&self.config), self, recipient_address, fee, duration)
+        NanoPay::new(
+            config_to_rpc_config(&self.config),
+            self,
+            recipient_address,
+            fee,
+            duration,
+        )
     }
 
     pub fn create_nano_pay_claimer(
@@ -145,7 +151,12 @@ impl Wallet {
         claim_interval_ms: u64,
         min_flush_amount: i64,
     ) -> Result<NanoPayClaimer, String> {
-        NanoPayClaimer::new(config_to_rpc_config(&self.config), recipient_address, claim_interval_ms, min_flush_amount)
+        NanoPayClaimer::new(
+            config_to_rpc_config(&self.config),
+            recipient_address,
+            claim_interval_ms,
+            min_flush_amount,
+        )
     }
 }
 

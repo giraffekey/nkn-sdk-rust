@@ -1,12 +1,12 @@
-use crate::program::to_script_hash;
-use crate::rpc::{get_height, send_raw_transaction, RPCConfig, RPCClient, SignerRPCClient};
+use crate::program::{to_script_hash, code_hash_to_address};
+use crate::rpc::{get_balance, get_height, send_raw_transaction, RPCClient, RPCConfig, SignerRPCClient};
 use crate::transaction::{unpack_payload_data, Payload, Transaction};
 use crate::vault::{AccountHolder, Wallet};
 
 use rand::{thread_rng, Rng};
 use std::{
     sync::{Arc, Mutex},
-    time::{UNIX_EPOCH, Duration, SystemTime},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{task, time::sleep};
 
@@ -154,12 +154,15 @@ impl NanoPayClaimer {
                 }
 
                 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-                let last_claim_duration = last_claim_time_clone.lock().unwrap().duration_since(UNIX_EPOCH).unwrap();
+                let last_claim_duration = last_claim_time_clone
+                    .lock()
+                    .unwrap()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap();
                 let claim_interval_duration = Duration::from_millis(claim_interval_ms);
 
                 if now < last_claim_duration + claim_interval_duration {
-                    let res = get_height(clone_rpc_config(&*rpc_config_clone)).await;
-                    let height = match res {
+                    let height = match get_height(clone_rpc_config(&*rpc_config_clone)).await {
                         Ok(height) => height,
                         Err(_) => break,
                     };
@@ -167,13 +170,16 @@ impl NanoPayClaimer {
 
                     if expiration > height + FORCE_FLUSH_DELTA {
                         let duration1 = last_claim_duration + claim_interval_duration - now;
-                        let duration2 = Duration::from_secs((expiration - height + FORCE_FLUSH_DELTA) * CONSENSUS_DURATION);
+                        let duration2 = Duration::from_secs(
+                            (expiration - height + FORCE_FLUSH_DELTA) * CONSENSUS_DURATION,
+                        );
 
                         sleep(if duration1 > duration2 {
                             duration2
                         } else {
                             duration1
-                        }).await;
+                        })
+                        .await;
 
                         if *closed_clone.lock().unwrap() {
                             break;
@@ -181,7 +187,7 @@ impl NanoPayClaimer {
                     }
                 }
 
-                let res = flush(
+                let res = Self::flush_fn(
                     false,
                     rpc_config_clone.clone(),
                     amount_clone.clone(),
@@ -197,18 +203,6 @@ impl NanoPayClaimer {
                     break;
                 }
             }
-
-            flush(
-                false,
-                rpc_config_clone.clone(),
-                amount_clone.clone(),
-                prev_flush_amount_clone.clone(),
-                min_flush_amount_clone.clone(),
-                expiration_clone.clone(),
-                last_claim_time_clone.clone(),
-                tx_clone.clone(),
-            )
-            .await.unwrap();
         });
 
         Ok(Self {
@@ -235,7 +229,7 @@ impl NanoPayClaimer {
         *self.prev_claimed_amount.lock().unwrap() + *self.amount.lock().unwrap()
     }
 
-    pub fn close(&self) {
+    pub fn close(&mut self) {
         *self.closed.lock().unwrap() = true;
     }
 
@@ -243,8 +237,8 @@ impl NanoPayClaimer {
         *self.closed.lock().unwrap()
     }
 
-    pub async fn flush(&self, force: bool) -> Result<(), String> {
-        flush(
+    pub async fn flush(&mut self, force: bool) -> Result<(), String> {
+        Self::flush_fn(
             force,
             self.rpc_config.clone(),
             self.amount.clone(),
@@ -257,52 +251,131 @@ impl NanoPayClaimer {
         .await
     }
 
-    pub fn claim(&self, tx: Transaction) -> i64 {
-        todo!()
-    }
-}
-
-async fn flush(
-    force: bool,
-    rpc_config: Arc<RPCConfig>,
-    amount: Arc<Mutex<i64>>,
-    prev_flush_amount: Arc<Mutex<i64>>,
-    min_flush_amount: Arc<i64>,
-    expiration: Arc<Mutex<u64>>,
-    last_claim_time: Arc<Mutex<SystemTime>>,
-    tx: Arc<Mutex<Option<Transaction>>>,
-) -> Result<(), String> {
-    if !force && *amount.lock().unwrap() - *prev_flush_amount.lock().unwrap() < *min_flush_amount {
-        return Ok(());
-    }
-
-    if tx.lock().unwrap().is_none() {
-        return Ok(());
-    }
-
-    let payload = unpack_payload_data(
-        &tx.lock()
-            .unwrap()
-            .as_ref()
-            .unwrap()
-            .unsigned_tx
-            .payload_data,
-    );
-
-    match payload {
-        Payload::NanoPay { amount, .. } => {
-            {
-                let tx = tx.lock().unwrap().as_ref().unwrap().clone();
-                send_raw_transaction(&tx, clone_rpc_config(&*rpc_config)).await?;
-            }
-
-            *tx.lock().unwrap() = None;
-            *expiration.lock().unwrap() = 0;
-            *last_claim_time.lock().unwrap() = SystemTime::now();
-            *prev_flush_amount.lock().unwrap() = amount;
-
-            Ok(())
+    async fn flush_fn(
+        force: bool,
+        rpc_config: Arc<RPCConfig>,
+        amount: Arc<Mutex<i64>>,
+        prev_flush_amount: Arc<Mutex<i64>>,
+        min_flush_amount: Arc<i64>,
+        expiration: Arc<Mutex<u64>>,
+        last_claim_time: Arc<Mutex<SystemTime>>,
+        tx: Arc<Mutex<Option<Transaction>>>,
+    ) -> Result<(), String> {
+        if !force
+            && *amount.lock().unwrap() - *prev_flush_amount.lock().unwrap() < *min_flush_amount
+        {
+            return Ok(());
         }
-        _ => Err("not a NanoPay payload".into()),
+
+        if tx.lock().unwrap().is_none() {
+            return Ok(());
+        }
+
+        let payload = unpack_payload_data(
+            &tx.lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .unsigned_tx
+                .payload_data,
+        );
+
+        let payload_amount = match payload {
+            Payload::NanoPay { amount, .. } => amount,
+            _ => return Err("not a NanoPay payload".into()),
+        };
+
+        {
+            let tx = tx.lock().unwrap().as_ref().unwrap().clone();
+            send_raw_transaction(&tx, clone_rpc_config(&*rpc_config)).await?;
+        }
+
+        *tx.lock().unwrap() = None;
+        *expiration.lock().unwrap() = 0;
+        *last_claim_time.lock().unwrap() = SystemTime::now();
+        *prev_flush_amount.lock().unwrap() = payload_amount;
+
+        Ok(())
+    }
+
+    pub async fn claim(&mut self, tx: &Transaction) -> Result<i64, String> {
+        let height = get_height(clone_rpc_config(&*self.rpc_config)).await?;
+
+        let (
+            payload_sender,
+            payload_recipient,
+            payload_id,
+            payload_amount,
+            txn_expiration,
+            nano_pay_expiration,
+        ) = match unpack_payload_data(&tx.unsigned_tx.payload_data) {
+            Payload::NanoPay {
+                sender,
+                recipient,
+                id,
+                amount,
+                txnexpiration,
+                nanopayexpiration,
+            } => (
+                sender,
+                recipient,
+                id,
+                amount,
+                txnexpiration,
+                nanopayexpiration,
+            ),
+            _ => return Err("not a NanoPay payload".into()),
+        };
+
+        if payload_recipient != self.recipient_program_hash {
+            return Err("wrong recipient".into());
+        }
+
+        if !tx.verify(height)? {
+            return Err("incorrect transaction".into());
+        }
+
+        let sender_address = code_hash_to_address(&payload_sender);
+
+        if *self.closed.lock().unwrap() {
+            return Err("nanopay closed".into());
+        }
+
+        if let Some(id) = self.id {
+            if id == payload_id {
+                if *self.amount.lock().unwrap() >= payload_amount {
+                    return Err("invalid amount".into());
+                }
+            } else {
+                self.flush(false).await?;
+
+                self.id = None;
+                *self.prev_claimed_amount.lock().unwrap() += *self.amount.lock().unwrap();
+                *self.prev_flush_amount.lock().unwrap() = 0;
+                *self.amount.lock().unwrap() = 0;
+            }
+        }
+
+        let sender_balance =
+            get_balance(&sender_address, clone_rpc_config(&self.rpc_config)).await?;
+
+        if sender_balance + *self.prev_flush_amount.lock().unwrap() < payload_amount {
+            return Err("insufficient balance".into());
+        }
+
+        if txn_expiration <= height + RECEIVER_EXPIRATION_DELTA {
+            return Err("expired nanopay transaction".into());
+        }
+
+        if nano_pay_expiration <= height + RECEIVER_EXPIRATION_DELTA {
+            return Err("expired nanopay".into());
+        }
+
+        self.id = Some(payload_id);
+        *self.tx.lock().unwrap() = Some(tx.clone());
+        *self.expiration.lock().unwrap() = txn_expiration;
+        *self.amount.lock().unwrap() = payload_amount;
+
+        Ok(*self.prev_claimed_amount.lock().unwrap() + *self.amount.lock().unwrap())
     }
 }

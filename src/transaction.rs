@@ -442,6 +442,10 @@ impl Transaction {
         }
     }
 
+    pub fn verify(&self, height: u64) -> Result<bool, String> {
+        todo!()
+    }
+
     pub fn verify_signature(&mut self) -> bool {
         if self.unsigned_tx.payload_data.r#type == PayloadType::Coinbase {
             return false;
