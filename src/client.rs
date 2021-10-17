@@ -245,7 +245,7 @@ impl RPCClient for Client {
         todo!()
     }
 
-    async fn send_raw_transaction(&self, txn: Transaction) -> Result<String, String> {
+    async fn send_raw_transaction(&self, txn: &Transaction) -> Result<String, String> {
         todo!()
     }
 }

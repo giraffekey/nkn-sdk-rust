@@ -27,7 +27,7 @@ impl Default for TransactionConfig {
 }
 
 #[derive(Deserialize, Serialize)]
-enum Payload {
+pub enum Payload {
     Coinbase {
         sender: Vec<u8>,
         recipient: Vec<u8>,
@@ -92,7 +92,7 @@ enum Payload {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
-enum PayloadType {
+pub enum PayloadType {
     Coinbase = 0,
     TransferAsset = 1,
     SigChain = 2,
@@ -148,11 +148,11 @@ impl ToString for PayloadType {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PayloadData {
-    r#type: PayloadType,
-    data: Vec<u8>,
+    pub r#type: PayloadType,
+    pub data: Vec<u8>,
 }
 
-fn pack_payload_data(payload: &Payload) -> PayloadData {
+pub fn pack_payload_data(payload: &Payload) -> PayloadData {
     let r#type = match payload {
         Payload::Coinbase { .. } => PayloadType::Coinbase,
         Payload::TransferAsset { .. } => PayloadType::TransferAsset,
@@ -171,7 +171,7 @@ fn pack_payload_data(payload: &Payload) -> PayloadData {
     PayloadData { r#type, data }
 }
 
-fn unpack_payload_data(payload_data: &PayloadData) -> Payload {
+pub fn unpack_payload_data(payload_data: &PayloadData) -> Payload {
     serde_json::from_slice(&payload_data.data).unwrap()
 }
 

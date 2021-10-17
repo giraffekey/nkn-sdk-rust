@@ -1,10 +1,11 @@
 use crate::program::to_script_hash;
 use crate::rpc::{RPCClient, SignerRPCClient};
-use crate::transaction::Transaction;
+use crate::transaction::{unpack_payload_data, Payload, Transaction};
 use crate::vault::{AccountHolder, Wallet};
 
 use rand::{thread_rng, Rng};
-use std::time::SystemTime;
+use std::{sync::{Arc, Mutex}, time::{Duration, SystemTime}};
+use tokio::{task, time::sleep};
 
 const SENDER_EXPIRATION_DELTA: u32 = 5;
 const FORCE_FLUSH_DELTA: u32 = 2;
@@ -80,18 +81,18 @@ impl<'a> NanoPay<'a> {
 }
 
 pub struct NanoPayClaimer<'a> {
-    rpc_client: &'a dyn RPCClient,
     recipient_address: String,
     recipient_program_hash: Vec<u8>,
-    min_flush_amount: i64,
-    amount: i64,
-    closed: bool,
-    expiration: u32,
-    last_claim_time: SystemTime,
-    prev_claimed_amount: i64,
-    prev_flush_amount: i64,
     id: Option<u64>,
-    tx: Option<Transaction>,
+    rpc_client: Arc<&'a dyn RPCClient>,
+    min_flush_amount: Arc<i64>,
+    amount: Arc<Mutex<i64>>,
+    closed: Arc<Mutex<bool>>,
+    expiration: Arc<Mutex<u32>>,
+    last_claim_time: Arc<Mutex<SystemTime>>,
+    prev_claimed_amount: Arc<Mutex<i64>>,
+    prev_flush_amount: Arc<Mutex<i64>>,
+    tx: Arc<Mutex<Option<Transaction>>>,
 }
 
 impl<'a> NanoPayClaimer<'a> {
@@ -103,24 +104,60 @@ impl<'a> NanoPayClaimer<'a> {
     ) -> Result<Self, String> {
         let recipient_program_hash = to_script_hash(recipient_address)?;
 
-        let this = Self {
-            rpc_client,
+        let rpc_client = Arc::new(rpc_client);
+        let min_flush_amount = Arc::new(min_flush_amount);
+        let amount = Arc::new(Mutex::new(0));
+        let closed = Arc::new(Mutex::new(false));
+        let expiration = Arc::new(Mutex::new(0));
+        let last_claim_time = Arc::new(Mutex::new(SystemTime::now()));
+        let prev_claimed_amount = Arc::new(Mutex::new(0));
+        let prev_flush_amount = Arc::new(Mutex::new(0));
+        let tx = Arc::new(Mutex::new(None));
+
+        let rpc_client_clone = rpc_client.clone();
+        let min_flush_amount_clone = min_flush_amount.clone();
+        let amount_clone = amount.clone();
+        let closed_clone = closed.clone();
+        let expiration_clone = expiration.clone();
+        let last_claim_time_clone = last_claim_time.clone();
+        let prev_claimed_amount_clone = prev_claimed_amount.clone();
+        let prev_flush_amount_clone = prev_flush_amount.clone();
+        let tx_clone = tx.clone();
+
+        task::spawn(async move {
+            loop {
+                sleep(Duration::from_secs(60)).await;
+
+                if *closed_clone.lock().unwrap() {
+                    return;
+                }
+
+                if tx_clone.lock().unwrap().is_none() {
+                    continue;
+                }
+
+                if *amount_clone.lock().unwrap() - *prev_flush_amount_clone.lock().unwrap() < *min_flush_amount_clone {
+                    continue;
+                }
+
+                todo!();
+            }
+        });
+
+        Ok(Self {
             recipient_address: recipient_address.into(),
             recipient_program_hash,
-            min_flush_amount,
-            amount: 0,
-            closed: false,
-            expiration: 0,
-            last_claim_time: SystemTime::now(),
-            prev_claimed_amount: 0,
-            prev_flush_amount: 0,
             id: None,
-            tx: None,
-        };
-
-        todo!()
-
-        // Ok(this)
+            rpc_client,
+            min_flush_amount,
+            amount,
+            closed,
+            expiration,
+            last_claim_time,
+            prev_claimed_amount,
+            prev_flush_amount,
+            tx,
+        })
     }
 
     pub fn recipient(&self) -> &str {
@@ -128,19 +165,39 @@ impl<'a> NanoPayClaimer<'a> {
     }
 
     pub fn amount(&self) -> i64 {
-        todo!()
+        *self.prev_claimed_amount.lock().unwrap() + *self.amount.lock().unwrap()
     }
 
     pub fn close(&self) {
-        todo!()
+        *self.closed.lock().unwrap() = true;
     }
 
     pub fn is_closed(&self) -> bool {
-        todo!()
+        *self.closed.lock().unwrap()
     }
 
-    pub fn flush(&self) {
-        todo!()
+    pub async fn flush(&self, force: bool) -> Result<(), String> {
+        if !force && *self.amount.lock().unwrap() - *self.prev_flush_amount.lock().unwrap() < *self.min_flush_amount {
+            return Ok(());
+        }
+
+        if self.tx.lock().unwrap().is_none() {
+            return Ok(());
+        }
+
+        let payload = unpack_payload_data(&self.tx.lock().unwrap().as_ref().unwrap().unsigned_tx.payload_data);
+
+        match payload {
+            Payload::NanoPay { amount, .. } => {
+                self.rpc_client.send_raw_transaction(self.tx.lock().unwrap().as_ref().unwrap()).await?;
+                *self.tx.lock().unwrap() = None;
+                *self.expiration.lock().unwrap() = 0;
+                *self.last_claim_time.lock().unwrap() = SystemTime::now();
+                *self.prev_flush_amount.lock().unwrap() = amount;
+                Ok(())
+            }
+            _ => Err("not a NanoPay payload".into()),
+        }
     }
 
     pub fn claim(&self, tx: Transaction) -> i64 {

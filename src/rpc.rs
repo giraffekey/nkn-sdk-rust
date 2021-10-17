@@ -14,6 +14,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+use tokio::task;
 
 #[async_trait]
 pub trait RPCClient {
@@ -37,7 +38,7 @@ pub trait RPCClient {
         subscriber_hash_prefix: &[u8],
     ) -> Result<u32, String>;
     async fn registrant(&self, name: &str) -> Result<Registrant, String>;
-    async fn send_raw_transaction(&self, txn: Transaction) -> Result<String, String>;
+    async fn send_raw_transaction(&self, txn: &Transaction) -> Result<String, String>;
 }
 
 #[async_trait]
@@ -170,7 +171,7 @@ pub async fn rpc_call<S: Serialize, D: DeserializeOwned + Send + 'static>(
         let client = client.clone();
         let body = body.clone();
 
-        join_handles.push(tokio::spawn(async move {
+        join_handles.push(task::spawn(async move {
             for address in &addresses {
                 if result.lock().unwrap().is_ok() {
                     return;
@@ -376,8 +377,8 @@ pub async fn get_height(config: RPCConfig) -> Result<u32, String> {
     rpc_call("getlatestblockheight", json!({}), config).await
 }
 
-pub async fn send_raw_transaction(tx: Transaction, config: RPCConfig) -> Result<String, String> {
-    let tx_hex: String = hex::encode(serde_json::to_string(&tx).unwrap());
+pub async fn send_raw_transaction(tx: &Transaction, config: RPCConfig) -> Result<String, String> {
+    let tx_hex: String = hex::encode(serde_json::to_string(tx).unwrap());
     rpc_call("sendrawtransaction", json!({ "tx": tx_hex }), config).await
 }
 
@@ -403,7 +404,7 @@ pub async fn transfer<S: SignerRPCClient>(
     }
 
     s.sign_transaction(&mut tx);
-    s.send_raw_transaction(tx).await
+    s.send_raw_transaction(&tx).await
 }
 
 pub async fn register_name<S: SignerRPCClient>(
@@ -430,7 +431,7 @@ pub async fn register_name<S: SignerRPCClient>(
     }
 
     s.sign_transaction(&mut tx);
-    s.send_raw_transaction(tx).await
+    s.send_raw_transaction(&tx).await
 }
 
 pub async fn transfer_name<S: SignerRPCClient>(
@@ -458,7 +459,7 @@ pub async fn transfer_name<S: SignerRPCClient>(
     }
 
     s.sign_transaction(&mut tx);
-    s.send_raw_transaction(tx).await
+    s.send_raw_transaction(&tx).await
 }
 
 pub async fn delete_name<S: SignerRPCClient>(
@@ -479,7 +480,7 @@ pub async fn delete_name<S: SignerRPCClient>(
     }
 
     s.sign_transaction(&mut tx);
-    s.send_raw_transaction(tx).await
+    s.send_raw_transaction(&tx).await
 }
 
 pub async fn subscribe<S: SignerRPCClient>(
@@ -511,7 +512,7 @@ pub async fn subscribe<S: SignerRPCClient>(
     }
 
     s.sign_transaction(&mut tx);
-    s.send_raw_transaction(tx).await
+    s.send_raw_transaction(&tx).await
 }
 
 pub async fn unsubscribe<S: SignerRPCClient>(
@@ -533,7 +534,7 @@ pub async fn unsubscribe<S: SignerRPCClient>(
     }
 
     s.sign_transaction(&mut tx);
-    s.send_raw_transaction(tx).await
+    s.send_raw_transaction(&tx).await
 }
 
 pub async fn measure_rpc_server(rpc_list: &[&str], timeout: u32) -> Result<Vec<String>, String> {

@@ -247,7 +247,7 @@ impl RPCClient for Wallet {
         get_registrant(name, config_to_rpc_config(&self.config)).await
     }
 
-    async fn send_raw_transaction(&self, txn: Transaction) -> Result<String, String> {
+    async fn send_raw_transaction(&self, txn: &Transaction) -> Result<String, String> {
         send_raw_transaction(txn, config_to_rpc_config(&self.config)).await
     }
 }

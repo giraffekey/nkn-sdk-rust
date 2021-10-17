@@ -86,7 +86,7 @@ impl RPCClient for MultiClient {
         todo!()
     }
 
-    async fn send_raw_transaction(&self, txn: Transaction) -> Result<String, String> {
+    async fn send_raw_transaction(&self, txn: &Transaction) -> Result<String, String> {
         todo!()
     }
 }
