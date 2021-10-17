@@ -12,7 +12,7 @@ use crate::transaction::{Transaction, TransactionConfig};
 use crate::vault::data::{
     WalletData, IV_LEN, MAX_COMPATIBLE_WALLET_VERSION, MIN_COMPATIBLE_WALLET_VERSION,
 };
-use crate::vault::{string_to_amount, Account, AccountHolder, ScryptConfig};
+use crate::vault::{Account, AccountHolder, ScryptConfig};
 
 use async_trait::async_trait;
 use rand::Rng;
@@ -310,6 +310,7 @@ impl SignerRPCClient for Wallet {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vault::string_to_amount;
 
     #[test]
     fn new_seed() {
@@ -392,6 +393,10 @@ mod tests {
             account,
             WalletConfig {
                 password: "42".into(),
+                scrypt: ScryptConfig {
+                    log_n: 10,
+                    ..ScryptConfig::default()
+                },
                 ..WalletConfig::default()
             },
         );
