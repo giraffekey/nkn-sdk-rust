@@ -22,7 +22,7 @@ pub trait RPCClient {
     async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> Result<u64, String>;
     async fn balance(&self) -> Result<i64, String>;
     async fn balance_by_address(&self, address: &str) -> Result<i64, String>;
-    async fn height(&self) -> Result<u32, String>;
+    async fn height(&self) -> Result<u64, String>;
     async fn subscribers(
         &self,
         topic: &str,
@@ -373,7 +373,7 @@ pub async fn get_balance(address: &str, config: RPCConfig) -> Result<i64, String
     Ok(balance.amount)
 }
 
-pub async fn get_height(config: RPCConfig) -> Result<u32, String> {
+pub async fn get_height(config: RPCConfig) -> Result<u64, String> {
     rpc_call("getlatestblockheight", json!({}), config).await
 }
 

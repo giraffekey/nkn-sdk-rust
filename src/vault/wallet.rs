@@ -16,7 +16,7 @@ use crate::vault::{Account, AccountHolder, ScryptConfig};
 
 use async_trait::async_trait;
 use rand::Rng;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 #[derive(Debug)]
 pub struct WalletConfig {
@@ -134,18 +134,18 @@ impl Wallet {
         &self,
         recipient_address: &str,
         fee: i64,
-        duration: u32,
+        duration: u64,
     ) -> Result<NanoPay, String> {
-        NanoPay::new(self, self, recipient_address, fee, duration)
+        NanoPay::new(config_to_rpc_config(&self.config), self, recipient_address, fee, duration)
     }
 
     pub fn create_nano_pay_claimer(
         &self,
         recipient_address: &str,
-        claim_interval_ms: u32,
+        claim_interval_ms: u64,
         min_flush_amount: i64,
     ) -> Result<NanoPayClaimer, String> {
-        NanoPayClaimer::new(self, recipient_address, claim_interval_ms, min_flush_amount)
+        NanoPayClaimer::new(config_to_rpc_config(&self.config), recipient_address, claim_interval_ms, min_flush_amount)
     }
 }
 
@@ -203,7 +203,7 @@ impl RPCClient for Wallet {
         get_balance(address, config_to_rpc_config(&self.config)).await
     }
 
-    async fn height(&self) -> Result<u32, String> {
+    async fn height(&self) -> Result<u64, String> {
         get_height(config_to_rpc_config(&self.config)).await
     }
 

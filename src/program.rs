@@ -81,7 +81,7 @@ pub fn create_signature_program_context(owner_public_key: &[u8]) -> ProgramConte
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Program {
     pub code: Vec<u8>,
     pub parameter: Vec<u8>,

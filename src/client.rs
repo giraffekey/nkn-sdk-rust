@@ -132,14 +132,14 @@ impl Client {
         todo!()
     }
 
-    pub fn create_nano_pay(&self, recipient_address: &str, fee: i64, duration: u32) -> NanoPay {
+    pub fn create_nano_pay(&self, recipient_address: &str, fee: i64, duration: u64) -> NanoPay {
         todo!()
     }
 
     pub fn create_nano_pay_claimer(
         &self,
         recipient_address: &str,
-        claim_interval_ms: u32,
+        claim_interval_ms: u64,
         min_flush_amount: i64,
     ) -> NanoPayClaimer {
         todo!()
@@ -214,7 +214,7 @@ impl RPCClient for Client {
         }
     }
 
-    async fn height(&self) -> Result<u32, String> {
+    async fn height(&self) -> Result<u64, String> {
         todo!()
     }
 

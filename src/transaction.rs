@@ -79,8 +79,8 @@ pub enum Payload {
         recipient: Vec<u8>,
         id: u64,
         amount: i64,
-        txnexpiration: u32,
-        nanopayexpiration: u32,
+        txnexpiration: u64,
+        nanopayexpiration: u64,
     },
     IssueAsset {
         sender: Vec<u8>,
@@ -146,7 +146,7 @@ impl ToString for PayloadType {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PayloadData {
     pub r#type: PayloadType,
     pub data: Vec<u8>,
@@ -193,7 +193,7 @@ fn deserialize_payload_data(bytes: &[u8]) -> PayloadData {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UnsignedTx {
     pub payload_data: PayloadData,
     pub nonce: u64,
@@ -225,7 +225,7 @@ fn random_attrs() -> [u8; TX_NONCE_LEN] {
     attrs
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Transaction {
     pub unsigned_tx: UnsignedTx,
     programs: Vec<Program>,
@@ -386,8 +386,8 @@ impl Transaction {
         recipient: &[u8],
         id: u64,
         amount: i64,
-        txn_expiration: u32,
-        nano_pay_expiration: u32,
+        txn_expiration: u64,
+        nano_pay_expiration: u64,
     ) -> Self {
         let payload = Payload::NanoPay {
             sender: sender.to_vec(),

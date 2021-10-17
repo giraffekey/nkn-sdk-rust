@@ -55,7 +55,7 @@ impl RPCClient for MultiClient {
         todo!()
     }
 
-    async fn height(&self) -> Result<u32, String> {
+    async fn height(&self) -> Result<u64, String> {
         todo!()
     }
 
