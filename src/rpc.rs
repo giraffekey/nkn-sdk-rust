@@ -556,7 +556,10 @@ pub async fn unsubscribe<S: SignerRPCClient>(
     s.send_raw_transaction(&tx).await
 }
 
-pub async fn measure_rpc_server(rpc_list: &[&str], timeout: Duration) -> Result<Vec<String>, String> {
+pub async fn measure_rpc_server(
+    rpc_list: &[&str],
+    timeout: Duration,
+) -> Result<Vec<String>, String> {
     let (tx, rx) = mpsc::channel();
 
     for address in rpc_list {
@@ -569,7 +572,9 @@ pub async fn measure_rpc_server(rpc_list: &[&str], timeout: Duration) -> Result<
                 rpc_server_address: vec![address.clone()],
                 rpc_timeout: timeout,
                 ..RPCConfig::default()
-            }).await {
+            })
+            .await
+            {
                 Ok(node_state) => node_state,
                 Err(err) => {
                     tx.send(None).unwrap();

@@ -9,6 +9,7 @@ use crate::rpc::{
 };
 use crate::signature::{sign_by_signer, SignableData, Signer};
 use crate::transaction::{Transaction, TransactionConfig};
+use crate::util::wallet_config_to_rpc_config;
 use crate::vault::data::{
     WalletData, IV_LEN, MAX_COMPATIBLE_WALLET_VERSION, MIN_COMPATIBLE_WALLET_VERSION,
 };
@@ -137,7 +138,7 @@ impl Wallet {
         duration: u64,
     ) -> Result<NanoPay, String> {
         NanoPay::new(
-            config_to_rpc_config(&self.config),
+            wallet_config_to_rpc_config(&self.config),
             self,
             recipient_address,
             fee,
@@ -151,9 +152,14 @@ impl Wallet {
         claim_interval_ms: u64,
         min_flush_amount: i64,
     ) -> Result<NanoPayClaimer, String> {
+        let recipient_address = if recipient_address.is_empty() {
+            self.address()
+        } else {
+            recipient_address.into()
+        };
         NanoPayClaimer::new(
-            config_to_rpc_config(&self.config),
-            recipient_address,
+            wallet_config_to_rpc_config(&self.config),
+            &recipient_address,
             claim_interval_ms,
             min_flush_amount,
         )
@@ -188,14 +194,6 @@ impl Signer for Wallet {
     }
 }
 
-fn config_to_rpc_config(config: &WalletConfig) -> RPCConfig {
-    RPCConfig {
-        rpc_server_address: config.rpc_server_address.clone(),
-        rpc_timeout: config.rpc_timeout,
-        rpc_concurrency: config.rpc_concurrency,
-    }
-}
-
 #[async_trait]
 impl RPCClient for Wallet {
     async fn nonce(&self, tx_pool: bool) -> Result<u64, String> {
@@ -203,7 +201,7 @@ impl RPCClient for Wallet {
     }
 
     async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> Result<u64, String> {
-        get_nonce(address, tx_pool, config_to_rpc_config(&self.config)).await
+        get_nonce(address, tx_pool, wallet_config_to_rpc_config(&self.config)).await
     }
 
     async fn balance(&self) -> Result<i64, String> {
@@ -211,11 +209,11 @@ impl RPCClient for Wallet {
     }
 
     async fn balance_by_address(&self, address: &str) -> Result<i64, String> {
-        get_balance(address, config_to_rpc_config(&self.config)).await
+        get_balance(address, wallet_config_to_rpc_config(&self.config)).await
     }
 
     async fn height(&self) -> Result<u64, String> {
-        get_height(config_to_rpc_config(&self.config)).await
+        get_height(wallet_config_to_rpc_config(&self.config)).await
     }
 
     async fn subscribers(
@@ -232,13 +230,13 @@ impl RPCClient for Wallet {
             limit,
             meta,
             tx_pool,
-            config_to_rpc_config(&self.config),
+            wallet_config_to_rpc_config(&self.config),
         )
         .await
     }
 
     async fn subscription(&self, topic: &str, subscriber: &str) -> Result<Subscription, String> {
-        get_subscription(topic, subscriber, config_to_rpc_config(&self.config)).await
+        get_subscription(topic, subscriber, wallet_config_to_rpc_config(&self.config)).await
     }
 
     async fn suscribers_count(
@@ -249,17 +247,17 @@ impl RPCClient for Wallet {
         get_subscribers_count(
             topic,
             subscriber_hash_prefix,
-            config_to_rpc_config(&self.config),
+            wallet_config_to_rpc_config(&self.config),
         )
         .await
     }
 
     async fn registrant(&self, name: &str) -> Result<Registrant, String> {
-        get_registrant(name, config_to_rpc_config(&self.config)).await
+        get_registrant(name, wallet_config_to_rpc_config(&self.config)).await
     }
 
     async fn send_raw_transaction(&self, txn: &Transaction) -> Result<String, String> {
-        send_raw_transaction(txn, config_to_rpc_config(&self.config)).await
+        send_raw_transaction(txn, wallet_config_to_rpc_config(&self.config)).await
     }
 }
 

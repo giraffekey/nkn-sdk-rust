@@ -3,14 +3,22 @@ use crate::crypto::ed25519_private_key_to_curve25519_private_key;
 use crate::message::MessageConfig;
 use crate::nano_pay::{NanoPay, NanoPayClaimer};
 use crate::rpc::{
-    get_balance, Node, RPCClient, RPCConfig, Registrant, SignerRPCClient, Subscribers, Subscription,
+    delete_name, get_balance, get_height, get_nonce, get_registrant, get_subscribers,
+    get_subscribers_count, get_subscription, register_name, send_raw_transaction, subscribe,
+    transfer, transfer_name, unsubscribe, Node, RPCClient, RPCConfig, Registrant, SignerRPCClient,
+    Subscribers, Subscription,
 };
 use crate::signature::Signer;
 use crate::transaction::{Transaction, TransactionConfig};
+use crate::util::{client_config_to_rpc_config, wallet_config_to_rpc_config};
 use crate::vault::{Account, AccountHolder, Wallet, WalletConfig};
 
 use async_trait::async_trait;
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+use tokio::{task, time::sleep};
 
 #[derive(Debug)]
 pub struct ClientConfig {
@@ -23,8 +31,8 @@ pub struct ClientConfig {
     pub msg_cache_cleanup_interval: u32,
     pub ws_handshake_timeout: u32,
     pub ws_write_timeout: u32,
-    pub min_reconnect_interval: u32,
-    pub max_reconnect_interval: u32,
+    pub min_reconnect_interval: u64,
+    pub max_reconnect_interval: u64,
     pub default_message_config: Option<MessageConfig>,
 }
 
@@ -56,6 +64,8 @@ pub struct Client {
     wallet: Wallet,
     identifier: Option<String>,
     curve_secret_key: Vec<u8>,
+    closed: Arc<Mutex<bool>>,
+    node: Option<Node>,
 }
 
 impl Client {
@@ -71,12 +81,16 @@ impl Client {
         let wallet = Wallet::new(account.clone(), wallet_config)?;
         let curve_secret_key = ed25519_private_key_to_curve25519_private_key(account.private_key());
 
+        let closed = Arc::new(Mutex::new(false));
+
         Ok(Self {
             config,
             account,
             wallet,
             identifier,
             curve_secret_key,
+            closed,
+            node: None,
         })
     }
 
@@ -85,23 +99,44 @@ impl Client {
     }
 
     pub fn set_config(&mut self, config: ClientConfig) {
-        self.config = config
-    }
-
-    pub fn close(&self) {
-        todo!()
+        self.config = config;
     }
 
     pub fn is_closed(&self) -> bool {
+        *self.closed.lock().unwrap()
+    }
+
+    pub fn close(&mut self) {
+        *self.closed.lock().unwrap() = true;
         todo!()
     }
 
-    pub fn reconnect(&self) {
+    pub fn connection(&self) {
+        todo!() // return WS connection
+    }
+
+    async fn connect(&self, max_retries: u32) -> Result<(), String> {
         todo!()
     }
 
-    pub fn node(&self) -> Node {
-        todo!()
+    pub async fn reconnect(&mut self) -> Result<(), String> {
+        if *self.closed.lock().unwrap() {
+            return Ok(());
+        }
+
+        log::info!("Reconnect in {} ms...", self.config.min_reconnect_interval);
+        sleep(Duration::from_millis(self.config.min_reconnect_interval)).await;
+
+        if let Err(err) = self.connect(0).await {
+            self.close();
+            Err(err)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub fn node(&self) -> &Option<Node> {
+        &self.node
     }
 
     pub fn publish(&self, topic: &str, data: impl Into<Vec<u8>>, config: MessageConfig) {
@@ -132,8 +167,19 @@ impl Client {
         todo!()
     }
 
-    pub fn create_nano_pay(&self, recipient_address: &str, fee: i64, duration: u64) -> NanoPay {
-        todo!()
+    pub fn create_nano_pay(
+        &self,
+        recipient_address: &str,
+        fee: i64,
+        duration: u64,
+    ) -> Result<NanoPay, String> {
+        NanoPay::new(
+            client_config_to_rpc_config(&self.config),
+            &self.wallet,
+            recipient_address,
+            fee,
+            duration,
+        )
     }
 
     pub fn create_nano_pay_claimer(
@@ -141,8 +187,18 @@ impl Client {
         recipient_address: &str,
         claim_interval_ms: u64,
         min_flush_amount: i64,
-    ) -> NanoPayClaimer {
-        todo!()
+    ) -> Result<NanoPayClaimer, String> {
+        let recipient_address = if recipient_address.is_empty() {
+            self.wallet.address()
+        } else {
+            recipient_address.into()
+        };
+        NanoPayClaimer::new(
+            client_config_to_rpc_config(&self.config),
+            &recipient_address,
+            claim_interval_ms,
+            min_flush_amount,
+        )
     }
 }
 
@@ -183,22 +239,24 @@ impl Signer for Client {
     }
 }
 
-fn config_to_rpc_config(config: &ClientConfig) -> RPCConfig {
-    RPCConfig {
-        rpc_server_address: config.rpc_server_address.clone(),
-        rpc_timeout: config.rpc_timeout,
-        rpc_concurrency: config.rpc_concurrency,
-    }
-}
-
 #[async_trait]
 impl RPCClient for Client {
     async fn nonce(&self, tx_pool: bool) -> Result<u64, String> {
-        todo!()
+        self.nonce_by_address(&self.wallet.address(), tx_pool).await
     }
 
     async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> Result<u64, String> {
-        todo!()
+        let wallet_config = self.wallet.config();
+        if wallet_config.rpc_server_address.is_empty() {
+            get_nonce(address, tx_pool, client_config_to_rpc_config(&self.config)).await
+        } else {
+            get_nonce(
+                address,
+                tx_pool,
+                wallet_config_to_rpc_config(&wallet_config),
+            )
+            .await
+        }
     }
 
     async fn balance(&self) -> Result<i64, String> {
@@ -208,14 +266,19 @@ impl RPCClient for Client {
     async fn balance_by_address(&self, address: &str) -> Result<i64, String> {
         let wallet_config = self.wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
-            get_balance(address, config_to_rpc_config(&self.config)).await
+            get_balance(address, client_config_to_rpc_config(&self.config)).await
         } else {
-            get_balance(address, config_to_rpc_config(&self.config)).await
+            get_balance(address, wallet_config_to_rpc_config(&wallet_config)).await
         }
     }
 
     async fn height(&self) -> Result<u64, String> {
-        todo!()
+        let wallet_config = self.wallet.config();
+        if wallet_config.rpc_server_address.is_empty() {
+            get_height(client_config_to_rpc_config(&self.config)).await
+        } else {
+            get_height(wallet_config_to_rpc_config(&wallet_config)).await
+        }
     }
 
     async fn subscribers(
@@ -226,11 +289,42 @@ impl RPCClient for Client {
         meta: bool,
         tx_pool: bool,
     ) -> Result<Subscribers, String> {
-        todo!()
+        let wallet_config = self.wallet.config();
+        if wallet_config.rpc_server_address.is_empty() {
+            get_subscribers(
+                topic,
+                offset,
+                limit,
+                meta,
+                tx_pool,
+                client_config_to_rpc_config(&self.config),
+            )
+            .await
+        } else {
+            get_subscribers(
+                topic,
+                offset,
+                limit,
+                meta,
+                tx_pool,
+                wallet_config_to_rpc_config(&wallet_config),
+            )
+            .await
+        }
     }
 
     async fn subscription(&self, topic: &str, subscriber: &str) -> Result<Subscription, String> {
-        todo!()
+        let wallet_config = self.wallet.config();
+        if wallet_config.rpc_server_address.is_empty() {
+            get_subscription(topic, subscriber, client_config_to_rpc_config(&self.config)).await
+        } else {
+            get_subscription(
+                topic,
+                subscriber,
+                wallet_config_to_rpc_config(&wallet_config),
+            )
+            .await
+        }
     }
 
     async fn suscribers_count(
@@ -238,22 +332,47 @@ impl RPCClient for Client {
         topic: &str,
         subscriber_hash_prefix: &[u8],
     ) -> Result<u32, String> {
-        todo!()
+        let wallet_config = self.wallet.config();
+        if wallet_config.rpc_server_address.is_empty() {
+            get_subscribers_count(
+                topic,
+                subscriber_hash_prefix,
+                client_config_to_rpc_config(&self.config),
+            )
+            .await
+        } else {
+            get_subscribers_count(
+                topic,
+                subscriber_hash_prefix,
+                wallet_config_to_rpc_config(&wallet_config),
+            )
+            .await
+        }
     }
 
     async fn registrant(&self, name: &str) -> Result<Registrant, String> {
-        todo!()
+        let wallet_config = self.wallet.config();
+        if wallet_config.rpc_server_address.is_empty() {
+            get_registrant(name, client_config_to_rpc_config(&self.config)).await
+        } else {
+            get_registrant(name, wallet_config_to_rpc_config(&wallet_config)).await
+        }
     }
 
     async fn send_raw_transaction(&self, txn: &Transaction) -> Result<String, String> {
-        todo!()
+        let wallet_config = self.wallet.config();
+        if wallet_config.rpc_server_address.is_empty() {
+            send_raw_transaction(txn, client_config_to_rpc_config(&self.config)).await
+        } else {
+            send_raw_transaction(txn, wallet_config_to_rpc_config(&wallet_config)).await
+        }
     }
 }
 
 #[async_trait]
 impl SignerRPCClient for Client {
     fn sign_transaction(&self, tx: &mut Transaction) {
-        todo!()
+        self.wallet.sign_transaction(tx);
     }
 
     async fn transfer(
@@ -262,11 +381,11 @@ impl SignerRPCClient for Client {
         amount: i64,
         config: TransactionConfig,
     ) -> Result<String, String> {
-        todo!()
+        transfer(self, address, amount, config).await
     }
 
     async fn register_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
-        todo!()
+        register_name(self, name, config).await
     }
 
     async fn transfer_name(
@@ -275,11 +394,11 @@ impl SignerRPCClient for Client {
         recipient_public_key: &[u8],
         config: TransactionConfig,
     ) -> Result<String, String> {
-        todo!()
+        transfer_name(self, name, recipient_public_key, config).await
     }
 
     async fn delete_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
-        todo!()
+        delete_name(self, name, config).await
     }
 
     async fn subscribe(
@@ -290,7 +409,7 @@ impl SignerRPCClient for Client {
         meta: &str,
         config: TransactionConfig,
     ) -> Result<String, String> {
-        todo!()
+        subscribe(self, identifier, topic, duration, meta, config).await
     }
 
     async fn unsubscribe(
@@ -299,6 +418,6 @@ impl SignerRPCClient for Client {
         topic: &str,
         config: TransactionConfig,
     ) -> Result<String, String> {
-        todo!()
+        unsubscribe(self, identifier, topic, config).await
     }
 }
