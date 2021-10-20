@@ -9,6 +9,10 @@ use crypto::ripemd160::Ripemd160;
 use crypto::scrypt::{scrypt, ScryptParams};
 use crypto::sha3::Sha3;
 
+pub const ED25519_PUBLIC_KEY_LENGTH: usize = 32;
+pub const ED25519_PRIVATE_KEY_LENGTH: usize = 64;
+pub const ED25519_SIGNATURE_LENGTH: usize = 64;
+
 pub fn ed25519_keypair(seed: &[u8]) -> (Vec<u8>, Vec<u8>) {
     let (private_key, public_key) = ed25519::keypair(seed);
     (private_key.to_vec(), public_key.to_vec())

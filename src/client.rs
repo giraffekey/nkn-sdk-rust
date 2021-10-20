@@ -1,6 +1,6 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER};
-use crate::crypto::ed25519_private_key_to_curve25519_private_key;
-use crate::message::MessageConfig;
+use crate::crypto::{ed25519_private_key_to_curve25519_private_key, ED25519_SIGNATURE_LENGTH, ED25519_PUBLIC_KEY_LENGTH};
+use crate::message::{MessageConfig, MessagePayload};
 use crate::nano_pay::{NanoPay, NanoPayClaimer};
 use crate::rpc::{
     delete_name, get_balance, get_height, get_nonce, get_registrant, get_subscribers,
@@ -14,23 +14,71 @@ use crate::util::{client_config_to_rpc_config, wallet_config_to_rpc_config};
 use crate::vault::{Account, AccountHolder, Wallet, WalletConfig};
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio::{task, time::sleep};
 
+const MAX_CLIENT_MESSAGE_SIZE: usize = 4000000;
+
+#[derive(Debug, Deserialize, Serialize)]
+enum ClientMessageType {
+    OutboundMessage = 0,
+    InboundMessage = 1,
+    Receipt = 2,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+enum CompressionType {
+    CompressionNone = 0,
+    CompressionZlib = 1,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ClientMessage {
+    message_type: ClientMessageType,
+    message: Vec<u8>,
+    compression_type: CompressionType,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct OutboundMessage {
+    dest: String,
+    dests: Vec<String>,
+    payload: Vec<u8>,
+    max_holding_seconds: u32,
+    nonce: u32,
+    block_hash: Vec<u8>,
+    signatures: Vec<Vec<u8>>,
+    payloads: Vec<Vec<u8>>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct InboundMessage {
+    src: String,
+    payload: Vec<u8>,
+    prev_hash: Vec<u8>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct Receipt {
+    prev_hash: Vec<u8>,
+    signature: Vec<u8>,
+}
+
 #[derive(Debug)]
 pub struct ClientConfig {
     pub rpc_server_address: Vec<String>,
     pub rpc_timeout: Duration,
     pub rpc_concurrency: u32,
-    pub msg_chan_length: u32,
+    pub msg_chan_length: usize,
     pub connect_retries: u32,
-    pub msg_cache_expiration: u32,
-    pub msg_cache_cleanup_interval: u32,
-    pub ws_handshake_timeout: u32,
-    pub ws_write_timeout: u32,
+    pub msg_cache_expiration: u64,
+    pub msg_cache_cleanup_interval: u64,
+    pub ws_handshake_timeout: u64,
+    pub ws_write_timeout: u64,
     pub min_reconnect_interval: u64,
     pub max_reconnect_interval: u64,
     pub default_message_config: Option<MessageConfig>,
@@ -139,28 +187,219 @@ impl Client {
         &self.node
     }
 
-    pub fn publish(&self, topic: &str, data: impl Into<Vec<u8>>, config: MessageConfig) {
+    async fn write_message(&self, data: &[u8]) -> Result<(), String> {
+        todo!();
+        self.reconnect().await
+    }
+
+    async fn process_dests(&self, dests: &[String]) -> Result<Vec<String>, String> {
+        if dests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut processed_dests = Vec::new();
+
+        for dest in dests {
+            let mut address: Vec<String> = dest.split('.').map(|s| s.to_string()).collect();
+
+            if address.last().unwrap().len() < 2 * ED25519_PUBLIC_KEY_LENGTH {
+                let reg = match self.registrant(address.last().unwrap()).await {
+                    Ok(reg) => reg,
+                    Err(_) => continue,
+                };
+
+                if reg.registrant.is_empty() {
+                    continue;
+                }
+
+                *address.last_mut().unwrap() = reg.registrant;
+            }
+
+            let processed_dest = address.join(".");
+
+            processed_dests.push(processed_dest);
+        }
+
+        if processed_dests.is_empty() {
+            Err("invalid destination".into())
+        } else {
+            Ok(processed_dests)
+        }
+    }
+
+    fn create_payloads(&self, dests: &[String], payload: MessagePayload, encrypted: bool) -> Result<Vec<Vec<u8>>, String> {
         todo!()
     }
 
-    pub fn publish_binary(&self, topic: &str, data: &[u8], config: MessageConfig) {
-        self.publish(topic, data, config)
-    }
-
-    pub fn publish_text(&self, topic: &str, data: &str, config: MessageConfig) {
-        self.publish(topic, data, config)
-    }
-
-    pub fn send(&self, dests: &[&str], data: impl Into<Vec<u8>>, config: MessageConfig) {
+    fn create_outbound_message(&self, dests: &[&str], payloads: &[&[u8]], encrypted: bool, max_holding_seconds: u32) -> Result<OutboundMessage, String> {
         todo!()
     }
 
-    pub fn send_binary(&self, dests: &[&str], data: &[u8], config: MessageConfig) {
-        self.send(dests, data, config)
+    fn create_client_message(&self, outbound_msg: &OutboundMessage) -> Result<ClientMessage, String> {
+        todo!()
     }
 
-    pub fn send_text(&self, dests: &[&str], data: &str, config: MessageConfig) {
-        self.send(dests, data, config)
+    async fn send_messages(
+        &self,
+        dests: &[String],
+        payload: MessagePayload,
+        encrypted: bool,
+        max_holding_seconds: u32,
+        ws_write_timeout: u64,
+    ) -> Result<(), String> {
+        let dests = self.process_dests(dests).await?;
+
+        if dests.is_empty() {
+            return Ok(());
+        }
+
+        let payloads = self.create_payloads(&dests, payload, encrypted)?;
+
+        let mut outbound_msgs = Vec::new();
+        let mut dest_list = Vec::new();
+        let mut payload_list = Vec::new();
+
+        if payloads.len() > 1 {
+            let mut total_size = 0;
+
+            for i in 0..payloads.len() {
+                let size = payloads[i].len() + dests[i].len() + ED25519_SIGNATURE_LENGTH;
+
+                if size > MAX_CLIENT_MESSAGE_SIZE {
+                    return Err("message oversize".into());
+                }
+
+                if total_size + size > MAX_CLIENT_MESSAGE_SIZE {
+                    outbound_msgs.push(self.create_outbound_message(
+                        &dest_list,
+                        &payload_list,
+                        encrypted,
+                        max_holding_seconds,
+                    )?);
+                    dest_list.clear();
+                    payload_list.clear();
+                    total_size = 0;
+                }
+
+                dest_list.push(&dests[i]);
+                payload_list.push(&payloads[i]);
+                total_size += size;
+            }
+        } else {
+            let mut size = payloads[0].len();
+
+            for dest in &dests {
+                size += dest.len() + ED25519_SIGNATURE_LENGTH;
+            }
+
+            if size > MAX_CLIENT_MESSAGE_SIZE {
+                return Err("message oversize".into());
+            }
+
+            dest_list = dests.iter().map(|dest| dest.as_str()).collect();
+            payload_list = payloads.iter().map(|payload| payload.as_slice()).collect();
+        }
+
+        outbound_msgs.push(self.create_outbound_message(
+            &dest_list,
+            &payload_list,
+            encrypted,
+            max_holding_seconds,
+        )?);
+
+        if outbound_msgs.len() > 1 {
+            log::info!(
+                "Client message size is greater than {} bytes, split into {} batches.",
+                MAX_CLIENT_MESSAGE_SIZE,
+                outbound_msgs.len()
+            );
+        }
+
+        for outbound_msg in outbound_msgs {
+            let client_msg = self.create_client_message(&outbound_msg)?;
+            self.write_message(&serde_json::to_vec(&client_msg).unwrap());
+        }
+
+        Ok(())
+    }
+
+    async fn publish(
+        &self,
+        topic: &str,
+        payload: MessagePayload,
+        config: MessageConfig,
+    ) -> Result<(), String> {
+        let subscribers = self
+            .subscribers(topic, config.offset, config.limit, false, config.tx_pool)
+            .await?;
+
+        let mut dests = Vec::new();
+        let mut offset = config.offset;
+
+        for subscriber in subscribers.subscribers.keys() {
+            dests.push(subscriber.clone());
+        }
+
+        while offset <= subscribers.subscribers.len() as u32 {
+            offset += config.limit;
+
+            let subscribers = self
+                .subscribers(topic, config.offset, config.limit, false, false)
+                .await?;
+
+            for subscriber in subscribers.subscribers.keys() {
+                dests.push(subscriber.clone());
+            }
+        }
+
+        if config.tx_pool {
+            for subscriber in subscribers.subscribers_in_tx_pool.keys() {
+                dests.push(subscriber.clone());
+            }
+        }
+
+        self.send_messages(
+            &dests,
+            payload,
+            !config.unencrypted,
+            config.max_holding_seconds,
+            self.config.ws_write_timeout,
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn publish_binary(
+        &self,
+        topic: &str,
+        data: &[u8],
+        config: MessageConfig,
+    ) -> Result<(), String> {
+        let payload = MessagePayload::new_binary(data, &config.message_id, &[], true);
+        self.publish(topic, payload, config).await
+    }
+
+    pub async fn publish_text(
+        &self,
+        topic: &str,
+        text: &str,
+        config: MessageConfig,
+    ) -> Result<(), String> {
+        let payload = MessagePayload::new_text(text, &config.message_id, &[], true);
+        self.publish(topic, payload, config).await
+    }
+
+    pub async fn send(&self, dests: &[&str], data: impl Into<Vec<u8>>, config: MessageConfig) {
+        todo!()
+    }
+
+    pub async fn send_binary(&self, dests: &[&str], data: &[u8], config: MessageConfig) {
+        self.send(dests, data, config).await
+    }
+
+    pub async fn send_text(&self, dests: &[&str], text: &str, config: MessageConfig) {
+        self.send(dests, text, config).await
     }
 
     pub fn set_write_deadline(&self, deadline: u64) {
