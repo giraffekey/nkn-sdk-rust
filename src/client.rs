@@ -1,6 +1,6 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER};
-use crate::crypto::{ed25519_private_key_to_curve25519_private_key, ED25519_SIGNATURE_LENGTH, ED25519_PUBLIC_KEY_LENGTH};
-use crate::message::{MessageConfig, MessagePayload};
+use crate::crypto::{ed25519_private_key_to_curve25519_private_key, sha256_hash, ed25519_sign, ED25519_SIGNATURE_LENGTH, ED25519_PUBLIC_KEY_LENGTH};
+use crate::message::{MessageConfig, MessagePayload, PayloadMessage};
 use crate::nano_pay::{NanoPay, NanoPayClaimer};
 use crate::rpc::{
     delete_name, get_balance, get_height, get_nonce, get_registrant, get_subscribers,
@@ -14,8 +14,11 @@ use crate::util::{client_config_to_rpc_config, wallet_config_to_rpc_config};
 use crate::vault::{Account, AccountHolder, Wallet, WalletConfig};
 
 use async_trait::async_trait;
+use flate2::{write::ZlibEncoder, Compression};
+use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use std::{
+    io::Write,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -110,10 +113,12 @@ pub struct Client {
     config: ClientConfig,
     account: Account,
     wallet: Wallet,
-    identifier: Option<String>,
+    address: String,
+    address_id: Vec<u8>,
     curve_secret_key: Vec<u8>,
     closed: Arc<Mutex<bool>>,
     node: Option<Node>,
+    sig_chain_block_hash: Option<String>,
 }
 
 impl Client {
@@ -131,14 +136,28 @@ impl Client {
 
         let closed = Arc::new(Mutex::new(false));
 
+        let pub_key_hex = hex::encode(account.public_key());
+        let address = if let Some(identifier) = identifier {
+            if identifier.is_empty() {
+                pub_key_hex
+            } else {
+                format!("{:?}.{:?}", identifier, pub_key_hex)
+            }
+        } else {
+            pub_key_hex
+        };
+        let address_id = sha256_hash(address.as_bytes());
+
         Ok(Self {
             config,
             account,
             wallet,
-            identifier,
+            address,
+            address_id,
             curve_secret_key,
             closed,
             node: None,
+            sig_chain_block_hash: None,
         })
     }
 
@@ -228,15 +247,99 @@ impl Client {
     }
 
     fn create_payloads(&self, dests: &[String], payload: MessagePayload, encrypted: bool) -> Result<Vec<Vec<u8>>, String> {
-        todo!()
+        if encrypted {
+            Ok(self.encrypt_payload(payload, dests))
+        } else {
+            let payload = serde_json::to_vec(&payload).unwrap();
+            let payload = serde_json::to_vec(&PayloadMessage {
+                payload,
+                encrypted: false,
+                nonce: Vec::new(),
+                encrypted_key: Vec::new(),
+            }).unwrap();
+            Ok(vec![payload])
+        }
     }
 
     fn create_outbound_message(&self, dests: &[&str], payloads: &[&[u8]], encrypted: bool, max_holding_seconds: u32) -> Result<OutboundMessage, String> {
-        todo!()
+        let mut outbound_msg = OutboundMessage {
+            dest: String::new(),
+            dests: dests.iter().map(|s| s.to_string()).collect(),
+            payload: Vec::new(),
+            max_holding_seconds,
+            nonce: 0,
+            block_hash: Vec::new(),
+            signatures: Vec::new(),
+            payloads: payloads.iter().map(|v| v.to_vec()).collect(),
+        };
+
+        let node_public_key = hex::decode(self.node.unwrap().public_key);
+        let sig_chain_element = SigChainElement { next_pubkey: node_public_key };
+        let sig_chain_element_ser = sig_chain_element.serialized_unsigned();
+
+        let mut rng = thread_rng();
+        let nonce = rng.gen();
+
+        let mut sig_chain = SigChain {
+            nonce,
+            src_id: self.address_id.clone(),
+            src_pubkey: self.public_key(),
+            elems: vec![sig_chain_element],
+        };
+
+        if let Some(sig_chain_block_hash) = self.sig_chain_block_hash {
+            let sig_chain_block_hash = hex::decode(sig_chain_block_hash).unwrap();
+            sig_chain.block_hash = sig_chain_block_hash.clone();
+            outbound_msg.block_hash = sig_chain_block_hash.clone();
+        }
+
+        let mut signatures = Vec::new();
+
+        for (i, dest) in dests.iter().enumerate() {
+            let (dest_id, dest_public_key, _) = parse_client_address(dest);
+            sig_chain.dest_id = dest_id;
+            sig_chain.dest_pubkey = dest_public_key;
+
+            if payloads.len() > 1 {
+                sig_chain.data_size = payloads[i].len();
+            } else {
+                sig_chain.data_size = payloads[0].len();
+            }
+
+            let metadata = sig_chain.serialization_metadata();
+            let mut digest = sha256_hash(metadata);
+            digest.extend(sig_chain_element_ser);
+            let digest = sha256_hash(&digest);
+
+            let signature = ed25519_sign(self.private_key(), &digest);
+            signatures.push(signature);
+        }
+
+        outbound_msg.signatures = signatures;
+        outbound_msg.nonce = nonce;
+        Ok(outbound_msg)
     }
 
     fn create_client_message(&self, outbound_msg: &OutboundMessage) -> Result<ClientMessage, String> {
-        todo!()
+        let outbound_msg_data = serde_json::to_vec(outbound_msg).unwrap();
+
+        if outbound_msg.payloads.len() > 1 {
+            let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
+            e.write_all(&outbound_msg_data);
+            let message = e.finish().unwrap();
+
+            Ok(ClientMessage {
+                message_type: ClientMessageType::OutboundMessage,
+                compression_type: CompressionType::CompressionZlib,
+                message,
+            })
+        } else {
+            Ok(ClientMessage {
+                message_type: ClientMessageType::OutboundMessage,
+                compression_type: CompressionType::CompressionNone,
+                message: outbound_msg_data,
+            })
+        }
     }
 
     async fn send_messages(
@@ -451,16 +554,7 @@ impl AccountHolder for Client {
     }
 
     fn address(&self) -> String {
-        let pub_key_hex = hex::encode(self.public_key());
-        if let Some(identifier) = &self.identifier {
-            if !identifier.is_empty() {
-                format!("{:?}.{:?}", identifier, pub_key_hex)
-            } else {
-                pub_key_hex
-            }
-        } else {
-            pub_key_hex
-        }
+        self.address.clone()
     }
 
     fn program_hash(&self) -> &[u8] {

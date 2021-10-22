@@ -1,8 +1,9 @@
 use rand::{thread_rng, Rng};
+use serde::{Deserialize, Serialize};
 
 pub const MESSAGE_ID_SIZE: usize = 8;
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub enum MessagePayloadType {
     Binary = 0,
     Text = 1,
@@ -10,7 +11,7 @@ pub enum MessagePayloadType {
     Session = 3,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct MessagePayload {
     pub r#type: MessagePayloadType,
     pub message_id: Vec<u8>,
@@ -67,6 +68,14 @@ impl MessagePayload {
             no_reply: false,
         }
     }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct PayloadMessage {
+    pub payload: Vec<u8>,
+    pub encrypted: bool,
+    pub nonce: Vec<u8>,
+    pub encrypted_key: Vec<u8>,
 }
 
 #[derive(Debug)]
