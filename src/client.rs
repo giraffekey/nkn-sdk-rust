@@ -315,8 +315,20 @@ impl Client {
         }
     }
 
-    fn decrypt_payload(&self, msg: MessagePayload, src_address: &str) -> Result<Vec<u8>, String> {
-        todo!()
+    fn decrypt_payload(&self, msg: PayloadMessage, src_address: &str) -> Result<Vec<u8>, String> {
+        let encrypted_payload = msg.payload;
+        let (_, src_pubkey, _) = parse_client_address(src_address)?;
+
+        if !msg.encrypted_key.is_empty() {
+            let shared_key = self.get_or_compute_shared_key(&src_pubkey)?;
+            let key = aes_decrypt(&msg.encrypted_key, &shared_key, &msg.nonce[..IV_LEN]);
+            let payload = aes_decrypt(&encrypted_payload, &key, &msg.nonce[IV_LEN..]);
+            Ok(payload)
+        } else {
+            let shared_key = self.get_or_compute_shared_key(&src_pubkey)?;
+            let payload = aes_decrypt(&encrypted_payload, &shared_key, &msg.nonce);
+            Ok(payload)
+        }
     }
 
     async fn write_message(&self, data: &[u8]) -> Result<(), String> {
