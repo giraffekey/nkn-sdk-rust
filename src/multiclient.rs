@@ -1,3 +1,4 @@
+use crate::crypto::SEED_LEN;
 use crate::rpc::{RPCClient, Registrant, SignerRPCClient, Subscribers, Subscription};
 use crate::signature::Signer;
 use crate::transaction::{Transaction, TransactionConfig};
@@ -14,7 +15,7 @@ impl AccountHolder for MultiClient {
         todo!()
     }
 
-    fn seed(&self) -> Vec<u8> {
+    fn seed(&self) -> [u8; SEED_LEN] {
         todo!()
     }
 

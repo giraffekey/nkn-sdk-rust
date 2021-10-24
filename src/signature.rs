@@ -1,4 +1,4 @@
-use crate::crypto::{ed25519_sign, ed25519_verify, sha256_hash};
+use crate::crypto::{ed25519_sign, ed25519_verify, sha256_hash, SHA256_LEN, SIGNATURE_LEN};
 use crate::program::Program;
 
 pub trait SignableData {
@@ -12,11 +12,11 @@ pub fn get_hash_data<D: SignableData>(data: &D) -> Vec<u8> {
     data.serialize_unsigned()
 }
 
-pub fn get_hash_for_signing<D: SignableData>(data: &D) -> Vec<u8> {
+pub fn get_hash_for_signing<D: SignableData>(data: &D) -> [u8; SHA256_LEN] {
     sha256_hash(&get_hash_data(data))
 }
 
-pub fn sign<D: SignableData>(data: &D, private_key: &[u8]) -> Vec<u8> {
+pub fn sign<D: SignableData>(data: &D, private_key: &[u8]) -> [u8; SIGNATURE_LEN] {
     ed25519_sign(&get_hash_for_signing(data), private_key)
 }
 
@@ -25,7 +25,7 @@ pub trait Signer {
     fn public_key(&self) -> &[u8];
 }
 
-pub fn sign_by_signer<D: SignableData, S: Signer>(data: &D, signer: &S) -> Vec<u8> {
+pub fn sign_by_signer<D: SignableData, S: Signer>(data: &D, signer: &S) -> [u8; SIGNATURE_LEN] {
     sign(data, signer.private_key())
 }
 

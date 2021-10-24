@@ -1,5 +1,6 @@
 use crate::crypto::{
-    aes_decrypt, aes_encrypt, ed25519_seed_from_private_key, scrypt_kdf, sha256_hash,
+    aes_decrypt, aes_encrypt, ed25519_seed_from_private_key, scrypt_kdf, sha256_hash, IV_LEN,
+    SHA256_LEN,
 };
 use crate::signature::Signer;
 use crate::vault::{Account, ScryptConfig, SCRYPT_SALT_LEN};
@@ -9,13 +10,12 @@ use serde::{Deserialize, Serialize};
 pub const WALLET_VERSION: u32 = 2;
 pub const MIN_COMPATIBLE_WALLET_VERSION: u32 = 1;
 pub const MAX_COMPATIBLE_WALLET_VERSION: u32 = 2;
-pub const IV_LEN: usize = 16;
 
 fn get_password_key(
     password: &[u8],
     version: u32,
     config: &ScryptConfig,
-) -> Result<Vec<u8>, String> {
+) -> Result<[u8; SHA256_LEN], String> {
     match version {
         1 => Ok(sha256_hash(&sha256_hash(password))),
         2 => Ok(scrypt_kdf(password, config)),

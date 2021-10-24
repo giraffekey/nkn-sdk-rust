@@ -1,4 +1,5 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER};
+use crate::crypto::{IV_LEN, SEED_LEN};
 use crate::nano_pay::{NanoPay, NanoPayClaimer};
 use crate::program::{create_signature_program_context, to_script_hash, Program};
 use crate::rpc::{
@@ -11,7 +12,7 @@ use crate::signature::{sign_by_signer, SignableData, Signer};
 use crate::transaction::{Transaction, TransactionConfig};
 use crate::util::wallet_config_to_rpc_config;
 use crate::vault::data::{
-    WalletData, IV_LEN, MAX_COMPATIBLE_WALLET_VERSION, MIN_COMPATIBLE_WALLET_VERSION,
+    WalletData, MAX_COMPATIBLE_WALLET_VERSION, MIN_COMPATIBLE_WALLET_VERSION,
 };
 use crate::vault::{Account, AccountHolder, ScryptConfig};
 
@@ -171,7 +172,7 @@ impl AccountHolder for Wallet {
         &self.account
     }
 
-    fn seed(&self) -> Vec<u8> {
+    fn seed(&self) -> [u8; SEED_LEN] {
         self.account.seed()
     }
 

@@ -1,4 +1,4 @@
-use crate::crypto::{ripemd160_hash, sha256_hash};
+use crate::crypto::{ripemd160_hash, sha256_hash, RIPEMD160_LEN};
 
 use base58::{FromBase58, ToBase58};
 use serde::{Deserialize, Serialize};
@@ -20,11 +20,11 @@ pub fn create_signature_program_code(public_key: &[u8]) -> Vec<u8> {
     code
 }
 
-pub fn to_code_hash(code: &[u8]) -> Vec<u8> {
+pub fn to_code_hash(code: &[u8]) -> [u8; RIPEMD160_LEN] {
     ripemd160_hash(&sha256_hash(code))
 }
 
-pub fn create_program_hash(public_key: &[u8]) -> Vec<u8> {
+pub fn create_program_hash(public_key: &[u8]) -> [u8; RIPEMD160_LEN] {
     to_code_hash(&create_signature_program_code(public_key))
 }
 
@@ -64,8 +64,8 @@ pub fn to_script_hash(address: &str) -> Result<Vec<u8>, String> {
 pub struct ProgramContext {
     pub code: Vec<u8>,
     pub parameters: Vec<u8>,
-    pub program_hash: Vec<u8>,
-    pub owner_public_key_hash: Vec<u8>,
+    pub program_hash: [u8; RIPEMD160_LEN],
+    pub owner_public_key_hash: [u8; RIPEMD160_LEN],
 }
 
 pub fn create_signature_program_context(owner_public_key: &[u8]) -> ProgramContext {

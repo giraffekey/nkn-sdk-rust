@@ -1,7 +1,8 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER};
 use crate::crypto::{
-    ed25519_private_key_to_curve25519_private_key, ed25519_sign, sha256_hash,
-    ED25519_PUBLIC_KEY_LENGTH, ED25519_SIGNATURE_LENGTH,
+    aes_decrypt, aes_encrypt, ed25519_exchange, ed25519_private_key_to_curve25519_private_key,
+    ed25519_public_key_to_curve25519_public_key, ed25519_sign, sha256_hash, IV_LEN, PUBLIC_KEY_LEN,
+    SEED_LEN, SHA256_LEN, SHARED_KEY_LEN, SIGNATURE_LEN,
 };
 use crate::message::{MessageConfig, MessagePayload, PayloadMessage};
 use crate::nano_pay::{NanoPay, NanoPayClaimer};
@@ -22,7 +23,9 @@ use flate2::{write::ZlibEncoder, Compression};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashMap,
     io::Write,
+    str,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -75,7 +78,7 @@ struct Receipt {
     signature: Vec<u8>,
 }
 
-fn parse_client_address(address_str: &str) -> Result<(Vec<u8>, Vec<u8>, String), String> {
+fn parse_client_address(address_str: &str) -> Result<([u8; SHA256_LEN], Vec<u8>, String), String> {
     let client_id = sha256_hash(address_str.as_bytes());
     let substrings: Vec<&str> = address_str.split(".").collect();
     let public_key_str = substrings.last().unwrap();
@@ -128,11 +131,12 @@ pub struct Client {
     account: Account,
     wallet: Wallet,
     address: String,
-    address_id: Vec<u8>,
-    curve_secret_key: Vec<u8>,
+    address_id: [u8; SHA256_LEN],
+    curve_secret_key: [u8; SHARED_KEY_LEN],
     closed: Arc<Mutex<bool>>,
     node: Option<Node>,
     sig_chain_block_hash: Option<String>,
+    shared_keys: Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
 }
 
 impl Client {
@@ -162,6 +166,8 @@ impl Client {
         };
         let address_id = sha256_hash(address.as_bytes());
 
+        let shared_keys = Arc::new(Mutex::new(HashMap::new()));
+
         Ok(Self {
             config,
             account,
@@ -172,6 +178,7 @@ impl Client {
             closed,
             node: None,
             sig_chain_block_hash: None,
+            shared_keys,
         })
     }
 
@@ -220,8 +227,92 @@ impl Client {
         &self.node
     }
 
-    fn encrypt_payload(&self, msg: MessagePayload, dests: &[String]) -> Result<Vec<Vec<u8>>, String> {
-        todo!()
+    fn get_or_compute_shared_key(
+        &self,
+        remote_public_key: &[u8],
+    ) -> Result<[u8; SHARED_KEY_LEN], String> {
+        let remote_public_key_str = str::from_utf8(remote_public_key).unwrap();
+        let shared_keys = self.shared_keys.lock().unwrap();
+
+        if let Some(shared_key) = shared_keys.get(remote_public_key_str) {
+            Ok(*shared_key)
+        } else {
+            drop(shared_keys);
+
+            if remote_public_key.len() != PUBLIC_KEY_LEN {
+                return Err("invalid public key size".into());
+            }
+
+            let curve_public_key = ed25519_public_key_to_curve25519_public_key(&remote_public_key);
+            let shared_key = ed25519_exchange(&curve_public_key, &self.curve_secret_key);
+
+            self.shared_keys
+                .lock()
+                .unwrap()
+                .insert(remote_public_key_str.into(), shared_key);
+
+            Ok(shared_key)
+        }
+    }
+
+    fn encrypt_payload(
+        &self,
+        payload: MessagePayload,
+        dests: &[String],
+    ) -> Result<Vec<Vec<u8>>, String> {
+        let raw_payload = serde_json::to_vec(&payload).unwrap();
+        let mut rng = thread_rng();
+
+        if dests.len() > 1 {
+            let mut key = [0u8; SHARED_KEY_LEN];
+            rng.fill(&mut key);
+
+            let mut msg_nonce = [0u8; IV_LEN];
+            rng.fill(&mut msg_nonce);
+
+            let encrypted_payload = aes_encrypt(&raw_payload, &key, &msg_nonce);
+
+            let mut msgs = Vec::new();
+
+            for dest in dests {
+                let (_, dest_pubkey, _) = parse_client_address(dest)?;
+                let shared_key = self.get_or_compute_shared_key(&dest_pubkey)?;
+
+                let mut key_nonce = [0u8; IV_LEN];
+                rng.fill(&mut key_nonce);
+
+                let encrypted_key = aes_encrypt(&key, &shared_key, &key_nonce);
+                let nonce = [key_nonce, msg_nonce].concat();
+
+                msgs.push(
+                    serde_json::to_vec(&PayloadMessage {
+                        payload: encrypted_payload.clone(),
+                        encrypted: true,
+                        nonce,
+                        encrypted_key,
+                    })
+                    .unwrap(),
+                );
+            }
+
+            Ok(msgs)
+        } else {
+            let (_, dest_pubkey, _) = parse_client_address(&dests[0])?;
+            let shared_key = self.get_or_compute_shared_key(&dest_pubkey)?;
+
+            let mut nonce = [0u8; IV_LEN];
+            rng.fill(&mut nonce);
+
+            let encrypted_payload = aes_encrypt(&raw_payload, &shared_key, &nonce);
+
+            Ok(vec![serde_json::to_vec(&PayloadMessage {
+                payload: encrypted_payload,
+                encrypted: true,
+                nonce: nonce.to_vec(),
+                encrypted_key: Vec::new(),
+            })
+            .unwrap()])
+        }
     }
 
     fn decrypt_payload(&self, msg: MessagePayload, src_address: &str) -> Result<Vec<u8>, String> {
@@ -243,7 +334,7 @@ impl Client {
         for dest in dests {
             let mut address: Vec<String> = dest.split('.').map(|s| s.to_string()).collect();
 
-            if address.last().unwrap().len() < 2 * ED25519_PUBLIC_KEY_LENGTH {
+            if address.last().unwrap().len() < 2 * PUBLIC_KEY_LEN {
                 let reg = match self.registrant(address.last().unwrap()).await {
                     Ok(reg) => reg,
                     Err(_) => continue,
@@ -326,7 +417,7 @@ impl Client {
             nonce,
             data_size: 0,
             block_hash: Vec::new(),
-            src_id: self.address_id.clone(),
+            src_id: self.address_id.to_vec(),
             src_pubkey: self.public_key().to_vec(),
             dest_id: Vec::new(),
             dest_pubkey: Vec::new(),
@@ -343,7 +434,7 @@ impl Client {
 
         for (i, dest) in dests.iter().enumerate() {
             let (dest_id, dest_public_key, _) = parse_client_address(dest)?;
-            sig_chain.dest_id = dest_id;
+            sig_chain.dest_id = dest_id.to_vec();
             sig_chain.dest_pubkey = dest_public_key;
 
             if payloads.len() > 1 {
@@ -353,12 +444,12 @@ impl Client {
             }
 
             let metadata = sig_chain.serialize_metadata();
-            let mut digest = sha256_hash(&metadata);
+            let mut digest = sha256_hash(&metadata).to_vec();
             digest.extend_from_slice(&sig_chain_element_ser);
             let digest = sha256_hash(&digest);
 
             let signature = ed25519_sign(self.private_key(), &digest);
-            signatures.push(signature);
+            signatures.push(signature.to_vec());
         }
 
         outbound_msg.signatures = signatures;
@@ -415,7 +506,7 @@ impl Client {
             let mut total_size = 0;
 
             for i in 0..payloads.len() {
-                let size = payloads[i].len() + dests[i].len() + ED25519_SIGNATURE_LENGTH;
+                let size = payloads[i].len() + dests[i].len() + SIGNATURE_LEN;
 
                 if size > MAX_CLIENT_MESSAGE_SIZE {
                     return Err("message oversize".into());
@@ -441,7 +532,7 @@ impl Client {
             let mut size = payloads[0].len();
 
             for dest in &dests {
-                size += dest.len() + ED25519_SIGNATURE_LENGTH;
+                size += dest.len() + SIGNATURE_LEN;
             }
 
             if size > MAX_CLIENT_MESSAGE_SIZE {
@@ -598,7 +689,7 @@ impl AccountHolder for Client {
         &self.account
     }
 
-    fn seed(&self) -> Vec<u8> {
+    fn seed(&self) -> [u8; SEED_LEN] {
         self.account.seed()
     }
 

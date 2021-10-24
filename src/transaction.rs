@@ -439,7 +439,7 @@ impl Transaction {
     pub fn hash(&self) -> Vec<u8> {
         match &self.hash {
             Some(hash) => hash.clone(),
-            None => sha256_hash(&get_hash_data(self)),
+            None => sha256_hash(&get_hash_data(self)).to_vec(),
         }
     }
 
@@ -490,18 +490,28 @@ impl SignableData for Transaction {
             Payload::Coinbase { sender, .. } => vec![sender],
             Payload::TransferAsset { sender, .. } => vec![sender],
             Payload::SigChain { submitter, .. } => vec![submitter],
-            Payload::RegisterName { registrant, .. } => vec![create_program_hash(&registrant)],
-            Payload::TransferName { registrant, .. } => vec![create_program_hash(&registrant)],
-            Payload::DeleteName { registrant, .. } => vec![create_program_hash(&registrant)],
-            Payload::Subscribe { subscriber, .. } => vec![create_program_hash(&subscriber)],
-            Payload::Unsubscribe { subscriber, .. } => vec![create_program_hash(&subscriber)],
+            Payload::RegisterName { registrant, .. } => {
+                vec![create_program_hash(&registrant).to_vec()]
+            }
+            Payload::TransferName { registrant, .. } => {
+                vec![create_program_hash(&registrant).to_vec()]
+            }
+            Payload::DeleteName { registrant, .. } => {
+                vec![create_program_hash(&registrant).to_vec()]
+            }
+            Payload::Subscribe { subscriber, .. } => {
+                vec![create_program_hash(&subscriber).to_vec()]
+            }
+            Payload::Unsubscribe { subscriber, .. } => {
+                vec![create_program_hash(&subscriber).to_vec()]
+            }
             Payload::GenerateId {
                 sender, publickey, ..
             } => {
                 let program_hash = if !sender.is_empty() {
                     sender
                 } else {
-                    create_program_hash(&publickey)
+                    create_program_hash(&publickey).to_vec()
                 };
 
                 vec![program_hash]

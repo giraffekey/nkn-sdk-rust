@@ -1,5 +1,8 @@
 use crate::constant::{MAXIMUM_PRECISION, STORAGE_FACTOR};
-use crate::crypto::{ed25519_keypair, ed25519_seed_from_private_key};
+use crate::crypto::{
+    ed25519_keypair, ed25519_seed_from_private_key, PRIVATE_KEY_LEN, PUBLIC_KEY_LEN, RIPEMD160_LEN,
+    SEED_LEN,
+};
 use crate::program::{code_hash_to_address, create_program_hash};
 use crate::signature::Signer;
 
@@ -7,9 +10,9 @@ use rand::Rng;
 
 #[derive(Debug, Clone)]
 pub struct Account {
-    private_key: Vec<u8>,
-    public_key: Vec<u8>,
-    program_hash: Vec<u8>,
+    private_key: [u8; PRIVATE_KEY_LEN],
+    public_key: [u8; PUBLIC_KEY_LEN],
+    program_hash: [u8; RIPEMD160_LEN],
 }
 
 impl Account {
@@ -35,7 +38,7 @@ impl Account {
         Self::new(&seed)
     }
 
-    pub fn seed(&self) -> Vec<u8> {
+    pub fn seed(&self) -> [u8; SEED_LEN] {
         ed25519_seed_from_private_key(&self.private_key)
     }
 
@@ -115,7 +118,7 @@ pub fn amount_to_string(amount: i64) -> String {
 
 pub trait AccountHolder {
     fn account(&self) -> &Account;
-    fn seed(&self) -> Vec<u8>;
+    fn seed(&self) -> [u8; SEED_LEN];
     fn address(&self) -> String;
     fn program_hash(&self) -> &[u8];
 }
