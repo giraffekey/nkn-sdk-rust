@@ -1,5 +1,8 @@
 use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER};
-use crate::crypto::{ed25519_private_key_to_curve25519_private_key, sha256_hash, ed25519_sign, ED25519_SIGNATURE_LENGTH, ED25519_PUBLIC_KEY_LENGTH};
+use crate::crypto::{
+    ed25519_private_key_to_curve25519_private_key, ed25519_sign, sha256_hash,
+    ED25519_PUBLIC_KEY_LENGTH, ED25519_SIGNATURE_LENGTH,
+};
 use crate::message::{MessageConfig, MessagePayload, PayloadMessage};
 use crate::nano_pay::{NanoPay, NanoPayClaimer};
 use crate::rpc::{
@@ -8,6 +11,7 @@ use crate::rpc::{
     transfer, transfer_name, unsubscribe, Node, RPCClient, RPCConfig, Registrant, SignerRPCClient,
     Subscribers, Subscription,
 };
+use crate::sigchain::{SigAlgo, SigChain, SigChainElement};
 use crate::signature::Signer;
 use crate::transaction::{Transaction, TransactionConfig};
 use crate::util::{client_config_to_rpc_config, wallet_config_to_rpc_config};
@@ -69,6 +73,16 @@ struct InboundMessage {
 struct Receipt {
     prev_hash: Vec<u8>,
     signature: Vec<u8>,
+}
+
+fn parse_client_address(address_str: &str) -> Result<(Vec<u8>, Vec<u8>, String), String> {
+    let client_id = sha256_hash(address_str.as_bytes());
+    let substrings: Vec<&str> = address_str.split(".").collect();
+    let public_key_str = substrings.last().unwrap();
+    let public_key = hex::decode(public_key_str)
+        .map_err(|_| "Invalid public key string converting to hex".to_string())?;
+    let identifier = substrings[..substrings.len() - 1].join(".");
+    Ok((client_id, public_key, identifier))
 }
 
 #[derive(Debug)]
@@ -206,6 +220,14 @@ impl Client {
         &self.node
     }
 
+    fn encrypt_payload(&self, msg: MessagePayload, dests: &[String]) -> Result<Vec<Vec<u8>>, String> {
+        todo!()
+    }
+
+    fn decrypt_payload(&self, msg: MessagePayload, src_address: &str) -> Result<Vec<u8>, String> {
+        todo!()
+    }
+
     async fn write_message(&self, data: &[u8]) -> Result<(), String> {
         todo!();
         self.reconnect().await
@@ -246,9 +268,14 @@ impl Client {
         }
     }
 
-    fn create_payloads(&self, dests: &[String], payload: MessagePayload, encrypted: bool) -> Result<Vec<Vec<u8>>, String> {
+    fn create_payloads(
+        &self,
+        dests: &[String],
+        payload: MessagePayload,
+        encrypted: bool,
+    ) -> Result<Vec<Vec<u8>>, String> {
         if encrypted {
-            Ok(self.encrypt_payload(payload, dests))
+            Ok(self.encrypt_payload(payload, dests)?)
         } else {
             let payload = serde_json::to_vec(&payload).unwrap();
             let payload = serde_json::to_vec(&PayloadMessage {
@@ -256,12 +283,19 @@ impl Client {
                 encrypted: false,
                 nonce: Vec::new(),
                 encrypted_key: Vec::new(),
-            }).unwrap();
+            })
+            .unwrap();
             Ok(vec![payload])
         }
     }
 
-    fn create_outbound_message(&self, dests: &[&str], payloads: &[&[u8]], encrypted: bool, max_holding_seconds: u32) -> Result<OutboundMessage, String> {
+    fn create_outbound_message(
+        &self,
+        dests: &[&str],
+        payloads: &[&[u8]],
+        encrypted: bool,
+        max_holding_seconds: u32,
+    ) -> Result<OutboundMessage, String> {
         let mut outbound_msg = OutboundMessage {
             dest: String::new(),
             dests: dests.iter().map(|s| s.to_string()).collect(),
@@ -273,21 +307,33 @@ impl Client {
             payloads: payloads.iter().map(|v| v.to_vec()).collect(),
         };
 
-        let node_public_key = hex::decode(self.node.unwrap().public_key);
-        let sig_chain_element = SigChainElement { next_pubkey: node_public_key };
-        let sig_chain_element_ser = sig_chain_element.serialized_unsigned();
+        let node_public_key = hex::decode(&self.node.as_ref().unwrap().public_key).unwrap();
+        let sig_chain_element = SigChainElement {
+            id: Vec::new(),
+            next_pubkey: node_public_key,
+            mining: false,
+            signature: Vec::new(),
+            sig_algo: SigAlgo::Signature,
+            vrf: Vec::new(),
+            proof: Vec::new(),
+        };
+        let sig_chain_element_ser = sig_chain_element.serialize_unsigned();
 
         let mut rng = thread_rng();
         let nonce = rng.gen();
 
         let mut sig_chain = SigChain {
             nonce,
+            data_size: 0,
+            block_hash: Vec::new(),
             src_id: self.address_id.clone(),
-            src_pubkey: self.public_key(),
+            src_pubkey: self.public_key().to_vec(),
+            dest_id: Vec::new(),
+            dest_pubkey: Vec::new(),
             elems: vec![sig_chain_element],
         };
 
-        if let Some(sig_chain_block_hash) = self.sig_chain_block_hash {
+        if let Some(sig_chain_block_hash) = &self.sig_chain_block_hash {
             let sig_chain_block_hash = hex::decode(sig_chain_block_hash).unwrap();
             sig_chain.block_hash = sig_chain_block_hash.clone();
             outbound_msg.block_hash = sig_chain_block_hash.clone();
@@ -296,19 +342,19 @@ impl Client {
         let mut signatures = Vec::new();
 
         for (i, dest) in dests.iter().enumerate() {
-            let (dest_id, dest_public_key, _) = parse_client_address(dest);
+            let (dest_id, dest_public_key, _) = parse_client_address(dest)?;
             sig_chain.dest_id = dest_id;
             sig_chain.dest_pubkey = dest_public_key;
 
             if payloads.len() > 1 {
-                sig_chain.data_size = payloads[i].len();
+                sig_chain.data_size = payloads[i].len() as u32;
             } else {
-                sig_chain.data_size = payloads[0].len();
+                sig_chain.data_size = payloads[0].len() as u32;
             }
 
-            let metadata = sig_chain.serialization_metadata();
-            let mut digest = sha256_hash(metadata);
-            digest.extend(sig_chain_element_ser);
+            let metadata = sig_chain.serialize_metadata();
+            let mut digest = sha256_hash(&metadata);
+            digest.extend_from_slice(&sig_chain_element_ser);
             let digest = sha256_hash(&digest);
 
             let signature = ed25519_sign(self.private_key(), &digest);
@@ -320,7 +366,10 @@ impl Client {
         Ok(outbound_msg)
     }
 
-    fn create_client_message(&self, outbound_msg: &OutboundMessage) -> Result<ClientMessage, String> {
+    fn create_client_message(
+        &self,
+        outbound_msg: &OutboundMessage,
+    ) -> Result<ClientMessage, String> {
         let outbound_msg_data = serde_json::to_vec(outbound_msg).unwrap();
 
         if outbound_msg.payloads.len() > 1 {

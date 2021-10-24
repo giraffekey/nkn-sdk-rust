@@ -1,5 +1,6 @@
 use crate::crypto::sha256_hash;
 use crate::program::{create_program_hash, Program};
+use crate::serialization::{read_u32, read_var_bytes, write_u32, write_var_bytes};
 use crate::signature::SignableData;
 use crate::signature::{get_hash_data, verify_signable_data};
 
@@ -177,15 +178,15 @@ pub fn unpack_payload_data(payload_data: &PayloadData) -> Payload {
 
 fn serialize_payload_data(payload_data: &PayloadData) -> Vec<u8> {
     let mut bytes = Vec::new();
-    let type32 = payload_data.r#type.clone() as u32;
-    bytes.extend_from_slice(&type32.to_ne_bytes());
-    bytes.extend_from_slice(&payload_data.data);
+    write_u32(&mut bytes, payload_data.r#type.clone() as u32);
+    write_var_bytes(&mut bytes, &payload_data.data);
     bytes
 }
 
 fn deserialize_payload_data(bytes: &[u8]) -> PayloadData {
-    let typ = u32::from_ne_bytes(bytes[0..4].try_into().unwrap());
-    let data = &bytes[4..];
+    let mut bytes = bytes.to_vec();
+    let typ = read_u32(&mut bytes);
+    let data = read_var_bytes(&mut bytes);
 
     PayloadData {
         r#type: typ.into(),

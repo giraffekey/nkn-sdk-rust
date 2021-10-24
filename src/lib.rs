@@ -9,5 +9,7 @@ pub mod vault;
 mod constant;
 mod crypto;
 mod program;
+mod serialization;
+mod sigchain;
 mod signature;
 mod util;
