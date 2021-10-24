@@ -2,7 +2,6 @@ use crate::crypto::{
     aes_decrypt, aes_encrypt, ed25519_seed_from_private_key, scrypt_kdf, sha256_hash, IV_LEN,
     SHA256_LEN,
 };
-use crate::signature::Signer;
 use crate::vault::{Account, ScryptConfig, SCRYPT_SALT_LEN};
 
 use serde::{Deserialize, Serialize};

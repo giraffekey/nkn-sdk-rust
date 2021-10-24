@@ -1,14 +1,13 @@
-use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER};
+use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER, MIN_NAME_REGISTRATION_FEE};
 use crate::crypto::{IV_LEN, SEED_LEN};
 use crate::nano_pay::{NanoPay, NanoPayClaimer};
-use crate::program::{create_signature_program_context, to_script_hash, Program};
+use crate::program::{create_signature_program_context, create_program_hash, to_script_hash, Program};
 use crate::rpc::{
-    delete_name, get_balance, get_height, get_nonce, get_registrant, get_subscribers,
-    get_subscribers_count, get_subscription, register_name, send_raw_transaction, subscribe,
-    transfer, transfer_name, unsubscribe, RPCClient, RPCConfig, Registrant, SignerRPCClient,
+    get_balance, get_height, get_nonce, get_registrant, get_subscribers,
+    get_subscribers_count, get_subscription, send_raw_transaction, RPCConfig, Registrant,
     Subscribers, Subscription,
 };
-use crate::signature::{sign_by_signer, SignableData, Signer};
+use crate::signature::{sign, SignableData};
 use crate::transaction::{Transaction, TransactionConfig};
 use crate::util::wallet_config_to_rpc_config;
 use crate::vault::data::{
@@ -16,7 +15,6 @@ use crate::vault::data::{
 };
 use crate::vault::{Account, AccountHolder, ScryptConfig};
 
-use async_trait::async_trait;
 use rand::Rng;
 use std::{sync::Arc, time::Duration};
 
@@ -111,20 +109,28 @@ impl Wallet {
         })
     }
 
-    pub fn verify_address(address: &str) -> bool {
-        to_script_hash(address).is_ok()
-    }
-
-    pub fn to_json(&self) -> String {
-        serde_json::to_string(&self.wallet_data).unwrap()
-    }
-
     pub fn config(&self) -> &WalletConfig {
         &self.config
     }
 
     pub fn set_config(&mut self, config: WalletConfig) {
         self.config = config
+    }
+
+    pub fn public_key(&self) -> &[u8] {
+        self.account.public_key()
+    }
+
+    pub fn private_key(&self) -> &[u8] {
+        self.account.private_key()
+    }
+
+    pub fn verify_address(address: &str) -> bool {
+        to_script_hash(address).is_ok()
+    }
+
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(&self.wallet_data).unwrap()
     }
 
     pub fn verify_password(&self, password: &str) -> Result<bool, String> {
@@ -165,59 +171,34 @@ impl Wallet {
             min_flush_amount,
         )
     }
-}
 
-impl AccountHolder for Wallet {
-    fn account(&self) -> &Account {
-        &self.account
+    pub fn sign_transaction(&self, tx: &mut Transaction) {
+        let ct = create_signature_program_context(self.public_key());
+        let signature = sign(tx, self.private_key());
+        tx.set_programs(vec![Program::new(&ct, &signature)]);
     }
 
-    fn seed(&self) -> [u8; SEED_LEN] {
-        self.account.seed()
-    }
-
-    fn address(&self) -> String {
-        self.account.wallet_address()
-    }
-
-    fn program_hash(&self) -> &[u8] {
-        self.account.program_hash()
-    }
-}
-
-impl Signer for Wallet {
-    fn public_key(&self) -> &[u8] {
-        self.account.public_key()
-    }
-
-    fn private_key(&self) -> &[u8] {
-        self.account.private_key()
-    }
-}
-
-#[async_trait]
-impl RPCClient for Wallet {
-    async fn nonce(&self, tx_pool: bool) -> Result<u64, String> {
+    pub async fn nonce(&self, tx_pool: bool) -> Result<u64, String> {
         self.nonce_by_address(&self.address(), tx_pool).await
     }
 
-    async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> Result<u64, String> {
+    pub async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> Result<u64, String> {
         get_nonce(address, tx_pool, wallet_config_to_rpc_config(&self.config)).await
     }
 
-    async fn balance(&self) -> Result<i64, String> {
+    pub async fn balance(&self) -> Result<i64, String> {
         self.balance_by_address(&self.address()).await
     }
 
-    async fn balance_by_address(&self, address: &str) -> Result<i64, String> {
+    pub async fn balance_by_address(&self, address: &str) -> Result<i64, String> {
         get_balance(address, wallet_config_to_rpc_config(&self.config)).await
     }
 
-    async fn height(&self) -> Result<u64, String> {
+    pub async fn height(&self) -> Result<u64, String> {
         get_height(wallet_config_to_rpc_config(&self.config)).await
     }
 
-    async fn subscribers(
+    pub async fn subscribers(
         &self,
         topic: &str,
         offset: u32,
@@ -236,11 +217,11 @@ impl RPCClient for Wallet {
         .await
     }
 
-    async fn subscription(&self, topic: &str, subscriber: &str) -> Result<Subscription, String> {
+    pub async fn subscription(&self, topic: &str, subscriber: &str) -> Result<Subscription, String> {
         get_subscription(topic, subscriber, wallet_config_to_rpc_config(&self.config)).await
     }
 
-    async fn suscribers_count(
+    pub async fn suscribers_count(
         &self,
         topic: &str,
         subscriber_hash_prefix: &[u8],
@@ -253,50 +234,108 @@ impl RPCClient for Wallet {
         .await
     }
 
-    async fn registrant(&self, name: &str) -> Result<Registrant, String> {
+    pub async fn registrant(&self, name: &str) -> Result<Registrant, String> {
         get_registrant(name, wallet_config_to_rpc_config(&self.config)).await
     }
 
-    async fn send_raw_transaction(&self, txn: &Transaction) -> Result<String, String> {
+    pub async fn send_raw_transaction(&self, txn: &Transaction) -> Result<String, String> {
         send_raw_transaction(txn, wallet_config_to_rpc_config(&self.config)).await
     }
-}
 
-#[async_trait]
-impl SignerRPCClient for Wallet {
-    fn sign_transaction(&self, tx: &mut Transaction) {
-        let ct = create_signature_program_context(self.account.public_key());
-        let signature = sign_by_signer(tx, &self.account);
-        tx.set_programs(vec![Program::new(&ct, &signature)]);
-    }
-
-    async fn transfer(
+    pub async fn transfer(
         &self,
         address: &str,
         amount: i64,
         config: TransactionConfig,
     ) -> Result<String, String> {
-        transfer(self, address, amount, config).await
+        let sender = create_program_hash(self.public_key());
+        let recipient = to_script_hash(address)?;
+
+        let nonce = if config.nonce > 0 {
+            config.nonce
+        } else {
+            self.nonce(true).await?
+        };
+
+        let mut tx = Transaction::new_transfer_asset(&sender, &recipient, nonce, amount, config.fee);
+
+        if config.attributes.len() > 0 {
+            tx.unsigned_tx.attributes = config.attributes;
+        }
+
+        self.sign_transaction(&mut tx);
+        self.send_raw_transaction(&tx).await
     }
 
-    async fn register_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
-        register_name(self, name, config).await
+    pub async fn register_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
+        let nonce = if config.nonce > 0 {
+            config.nonce
+        } else {
+            self.nonce(true).await?
+        };
+
+        let mut tx = Transaction::new_register_name(
+            self.public_key(),
+            name,
+            nonce,
+            MIN_NAME_REGISTRATION_FEE,
+            config.fee,
+        );
+
+        if config.attributes.len() > 0 {
+            tx.unsigned_tx.attributes = config.attributes;
+        }
+
+        self.sign_transaction(&mut tx);
+        self.send_raw_transaction(&tx).await
     }
 
-    async fn transfer_name(
+    pub async fn transfer_name(
         &self,
         name: &str,
         recipient_public_key: &[u8],
         config: TransactionConfig,
     ) -> Result<String, String> {
-        transfer_name(self, name, recipient_public_key, config).await
+        let nonce = if config.nonce > 0 {
+            config.nonce
+        } else {
+            self.nonce(true).await?
+        };
+
+        let mut tx = Transaction::new_transfer_name(
+            self.public_key(),
+            recipient_public_key,
+            name,
+            nonce,
+            config.fee,
+        );
+
+        if config.attributes.len() > 0 {
+            tx.unsigned_tx.attributes = config.attributes;
+        }
+
+        self.sign_transaction(&mut tx);
+        self.send_raw_transaction(&tx).await
     }
 
-    async fn delete_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
-        delete_name(self, name, config).await
+    pub async fn delete_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
+        let nonce = if config.nonce > 0 {
+            config.nonce
+        } else {
+            self.nonce(true).await?
+        };
+
+        let mut tx = Transaction::new_delete_name(self.public_key(), name, nonce, config.fee);
+
+        if config.attributes.len() > 0 {
+            tx.unsigned_tx.attributes = config.attributes;
+        }
+
+        self.sign_transaction(&mut tx);
+        self.send_raw_transaction(&tx).await
     }
 
-    async fn subscribe(
+    pub async fn subscribe(
         &self,
         identifier: &str,
         topic: &str,
@@ -304,16 +343,68 @@ impl SignerRPCClient for Wallet {
         meta: &str,
         config: TransactionConfig,
     ) -> Result<String, String> {
-        subscribe(self, identifier, topic, duration, meta, config).await
+        let nonce = if config.nonce > 0 {
+            config.nonce
+        } else {
+            self.nonce(true).await?
+        };
+
+        let mut tx = Transaction::new_subscribe(
+            self.public_key(),
+            identifier,
+            topic,
+            duration,
+            meta,
+            nonce,
+            config.fee,
+        );
+
+        if config.attributes.len() > 0 {
+            tx.unsigned_tx.attributes = config.attributes;
+        }
+
+        self.sign_transaction(&mut tx);
+        self.send_raw_transaction(&tx).await
     }
 
-    async fn unsubscribe(
+    pub async fn unsubscribe(
         &self,
         identifier: &str,
         topic: &str,
         config: TransactionConfig,
     ) -> Result<String, String> {
-        unsubscribe(self, identifier, topic, config).await
+        let nonce = if config.nonce > 0 {
+            config.nonce
+        } else {
+            self.nonce(true).await?
+        };
+
+        let mut tx = Transaction::new_unsubscribe(self.public_key(), identifier, topic, nonce, config.fee);
+
+        if config.attributes.len() > 0 {
+            tx.unsigned_tx.attributes = config.attributes;
+        }
+
+        self.sign_transaction(&mut tx);
+        self.send_raw_transaction(&tx).await
+    }
+}
+
+impl AccountHolder for Wallet {
+    fn account(&self) -> &Account {
+        &self.account
+    }
+
+    fn seed(&self) -> [u8; SEED_LEN] {
+        self.account.seed()
+    }
+
+    fn address(&self) -> String {
+        self.account.wallet_address()
+    }
+
+    fn program_hash(&self) -> &[u8] {
+        self.account.program_hash()
     }
 }
 

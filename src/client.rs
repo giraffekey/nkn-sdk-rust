@@ -1,24 +1,22 @@
-use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER};
+use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER, MIN_NAME_REGISTRATION_FEE};
+use crate::program::{create_program_hash, to_script_hash};
 use crate::crypto::{
     aes_decrypt, aes_encrypt, ed25519_exchange, ed25519_private_key_to_curve25519_private_key,
     ed25519_public_key_to_curve25519_public_key, ed25519_sign, sha256_hash, IV_LEN, PUBLIC_KEY_LEN,
     SEED_LEN, SHA256_LEN, SHARED_KEY_LEN, SIGNATURE_LEN,
 };
-use crate::message::{MessageConfig, MessagePayload, PayloadMessage};
+use crate::message::{Message, MessageConfig, MessagePayload, PayloadMessage};
 use crate::nano_pay::{NanoPay, NanoPayClaimer};
 use crate::rpc::{
-    delete_name, get_balance, get_height, get_nonce, get_registrant, get_subscribers,
-    get_subscribers_count, get_subscription, register_name, send_raw_transaction, subscribe,
-    transfer, transfer_name, unsubscribe, Node, RPCClient, RPCConfig, Registrant, SignerRPCClient,
+    get_balance, get_height, get_nonce, get_registrant, get_subscribers,
+    get_subscribers_count, get_subscription, send_raw_transaction, Node, Registrant,
     Subscribers, Subscription,
 };
 use crate::sigchain::{SigAlgo, SigChain, SigChainElement};
-use crate::signature::Signer;
 use crate::transaction::{Transaction, TransactionConfig};
 use crate::util::{client_config_to_rpc_config, wallet_config_to_rpc_config};
 use crate::vault::{Account, AccountHolder, Wallet, WalletConfig};
 
-use async_trait::async_trait;
 use flate2::{write::ZlibEncoder, Compression};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
@@ -26,7 +24,7 @@ use std::{
     collections::HashMap,
     io::Write,
     str,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, mpsc::{channel, Sender, Receiver}},
     time::Duration,
 };
 use tokio::{task, time::sleep};
@@ -136,6 +134,9 @@ pub struct Client {
     closed: Arc<Mutex<bool>>,
     node: Option<Node>,
     sig_chain_block_hash: Option<String>,
+    connect_channel: (Sender<Node>, Receiver<Node>),
+    message_channel: (Sender<Message>, Receiver<Message>),
+    response_channels: HashMap<String, (Sender<Message>, Receiver<Message>)>,
     shared_keys: Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
 }
 
@@ -178,6 +179,9 @@ impl Client {
             closed,
             node: None,
             sig_chain_block_hash: None,
+            connect_channel: channel(),
+            message_channel: channel(),
+            response_channels: HashMap::new(),
             shared_keys,
         })
     }
@@ -188,6 +192,14 @@ impl Client {
 
     pub fn set_config(&mut self, config: ClientConfig) {
         self.config = config;
+    }
+
+    pub fn private_key(&self) -> &[u8] {
+        self.account.private_key()
+    }
+
+    pub fn public_key(&self) -> &[u8] {
+        self.account.public_key()
     }
 
     pub fn is_closed(&self) -> bool {
@@ -201,6 +213,16 @@ impl Client {
 
     pub fn connection(&self) {
         todo!() // return WS connection
+    }
+
+    pub fn wait_for_connect(&self) -> Result<Node, String> {
+        let (_, rx) = &self.connect_channel;
+        rx.recv().map_err(|_| "Receiver failed".into())
+    }
+
+    pub fn wait_for_message(&self) -> Result<Message, String> {
+        let (_, rx) = &self.message_channel;
+        rx.recv().map_err(|_| "Receiver failed".into())
     }
 
     async fn connect(&self, max_retries: u32) -> Result<(), String> {
@@ -336,7 +358,7 @@ impl Client {
         self.reconnect().await
     }
 
-    async fn process_dests(&self, dests: &[String]) -> Result<Vec<String>, String> {
+    async fn process_dests(&self, dests: &[&str]) -> Result<Vec<String>, String> {
         if dests.is_empty() {
             return Ok(Vec::new());
         }
@@ -496,7 +518,7 @@ impl Client {
 
     async fn send_messages(
         &self,
-        dests: &[String],
+        dests: &[&str],
         payload: MessagePayload,
         encrypted: bool,
         max_holding_seconds: u32,
@@ -551,8 +573,8 @@ impl Client {
                 return Err("message oversize".into());
             }
 
-            dest_list = dests.iter().map(|dest| dest.as_str()).collect();
-            payload_list = payloads.iter().map(|payload| payload.as_slice()).collect();
+            dest_list = dests.iter().map(|s| s.as_str()).collect();
+            payload_list = payloads.iter().map(|p| p.as_slice()).collect();
         }
 
         outbound_msgs.push(self.create_outbound_message(
@@ -613,6 +635,7 @@ impl Client {
             }
         }
 
+        let dests: Vec<&str> = dests.iter().map(|s| s.as_str()).collect();
         self.send_messages(
             &dests,
             payload,
@@ -645,16 +668,27 @@ impl Client {
         self.publish(topic, payload, config).await
     }
 
-    pub async fn send(&self, dests: &[&str], data: impl Into<Vec<u8>>, config: MessageConfig) {
-        todo!()
+    pub async fn send(&mut self, dests: &[&str], payload: MessagePayload, config: MessageConfig) -> Result<(), String> {
+        let message_id = payload.message_id.clone();
+
+        self.send_messages(dests, payload, !config.unencrypted, config.max_holding_seconds, self.config.ws_write_timeout).await?;
+
+        if !config.no_reply {
+            let message_id = str::from_utf8(&message_id).unwrap();
+            self.response_channels.insert(message_id.into(), channel());
+        }
+
+        Ok(())
     }
 
-    pub async fn send_binary(&self, dests: &[&str], data: &[u8], config: MessageConfig) {
-        self.send(dests, data, config).await
+    pub async fn send_binary(&mut self, dests: &[&str], data: &[u8], config: MessageConfig) -> Result<(), String> {
+        let payload = MessagePayload::new_binary(data, &config.message_id, &[], true);
+        self.send(dests, payload, config).await
     }
 
-    pub async fn send_text(&self, dests: &[&str], text: &str, config: MessageConfig) {
-        self.send(dests, text, config).await
+    pub async fn send_text(&mut self, dests: &[&str], text: &str, config: MessageConfig) -> Result<(), String> {
+        let payload = MessagePayload::new_text(text, &config.message_id, &[], true);
+        self.send(dests, payload, config).await
     }
 
     pub fn set_write_deadline(&self, deadline: u64) {
@@ -694,43 +728,16 @@ impl Client {
             min_flush_amount,
         )
     }
-}
 
-impl AccountHolder for Client {
-    fn account(&self) -> &Account {
-        &self.account
+    pub fn sign_transaction(&self, tx: &mut Transaction) {
+        self.wallet.sign_transaction(tx);
     }
 
-    fn seed(&self) -> [u8; SEED_LEN] {
-        self.account.seed()
-    }
-
-    fn address(&self) -> String {
-        self.address.clone()
-    }
-
-    fn program_hash(&self) -> &[u8] {
-        self.account.program_hash()
-    }
-}
-
-impl Signer for Client {
-    fn private_key(&self) -> &[u8] {
-        self.account.private_key()
-    }
-
-    fn public_key(&self) -> &[u8] {
-        self.account.public_key()
-    }
-}
-
-#[async_trait]
-impl RPCClient for Client {
-    async fn nonce(&self, tx_pool: bool) -> Result<u64, String> {
+    pub async fn nonce(&self, tx_pool: bool) -> Result<u64, String> {
         self.nonce_by_address(&self.wallet.address(), tx_pool).await
     }
 
-    async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> Result<u64, String> {
+    pub async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> Result<u64, String> {
         let wallet_config = self.wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
             get_nonce(address, tx_pool, client_config_to_rpc_config(&self.config)).await
@@ -744,11 +751,11 @@ impl RPCClient for Client {
         }
     }
 
-    async fn balance(&self) -> Result<i64, String> {
+    pub async fn balance(&self) -> Result<i64, String> {
         self.balance_by_address(&self.wallet.address()).await
     }
 
-    async fn balance_by_address(&self, address: &str) -> Result<i64, String> {
+    pub async fn balance_by_address(&self, address: &str) -> Result<i64, String> {
         let wallet_config = self.wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
             get_balance(address, client_config_to_rpc_config(&self.config)).await
@@ -757,7 +764,7 @@ impl RPCClient for Client {
         }
     }
 
-    async fn height(&self) -> Result<u64, String> {
+    pub async fn height(&self) -> Result<u64, String> {
         let wallet_config = self.wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
             get_height(client_config_to_rpc_config(&self.config)).await
@@ -766,7 +773,7 @@ impl RPCClient for Client {
         }
     }
 
-    async fn subscribers(
+    pub async fn subscribers(
         &self,
         topic: &str,
         offset: u32,
@@ -798,7 +805,7 @@ impl RPCClient for Client {
         }
     }
 
-    async fn subscription(&self, topic: &str, subscriber: &str) -> Result<Subscription, String> {
+    pub async fn subscription(&self, topic: &str, subscriber: &str) -> Result<Subscription, String> {
         let wallet_config = self.wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
             get_subscription(topic, subscriber, client_config_to_rpc_config(&self.config)).await
@@ -812,7 +819,7 @@ impl RPCClient for Client {
         }
     }
 
-    async fn suscribers_count(
+    pub async fn suscribers_count(
         &self,
         topic: &str,
         subscriber_hash_prefix: &[u8],
@@ -835,7 +842,7 @@ impl RPCClient for Client {
         }
     }
 
-    async fn registrant(&self, name: &str) -> Result<Registrant, String> {
+    pub async fn registrant(&self, name: &str) -> Result<Registrant, String> {
         let wallet_config = self.wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
             get_registrant(name, client_config_to_rpc_config(&self.config)).await
@@ -844,7 +851,7 @@ impl RPCClient for Client {
         }
     }
 
-    async fn send_raw_transaction(&self, txn: &Transaction) -> Result<String, String> {
+    pub async fn send_raw_transaction(&self, txn: &Transaction) -> Result<String, String> {
         let wallet_config = self.wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
             send_raw_transaction(txn, client_config_to_rpc_config(&self.config)).await
@@ -852,41 +859,101 @@ impl RPCClient for Client {
             send_raw_transaction(txn, wallet_config_to_rpc_config(&wallet_config)).await
         }
     }
-}
 
-#[async_trait]
-impl SignerRPCClient for Client {
-    fn sign_transaction(&self, tx: &mut Transaction) {
-        self.wallet.sign_transaction(tx);
-    }
-
-    async fn transfer(
+    pub async fn transfer(
         &self,
         address: &str,
         amount: i64,
         config: TransactionConfig,
     ) -> Result<String, String> {
-        transfer(self, address, amount, config).await
+        let sender = create_program_hash(self.public_key());
+        let recipient = to_script_hash(address)?;
+
+        let nonce = if config.nonce > 0 {
+            config.nonce
+        } else {
+            self.nonce(true).await?
+        };
+
+        let mut tx = Transaction::new_transfer_asset(&sender, &recipient, nonce, amount, config.fee);
+
+        if config.attributes.len() > 0 {
+            tx.unsigned_tx.attributes = config.attributes;
+        }
+
+        self.sign_transaction(&mut tx);
+        self.send_raw_transaction(&tx).await
     }
 
-    async fn register_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
-        register_name(self, name, config).await
+    pub async fn register_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
+        let nonce = if config.nonce > 0 {
+            config.nonce
+        } else {
+            self.nonce(true).await?
+        };
+
+        let mut tx = Transaction::new_register_name(
+            self.public_key(),
+            name,
+            nonce,
+            MIN_NAME_REGISTRATION_FEE,
+            config.fee,
+        );
+
+        if config.attributes.len() > 0 {
+            tx.unsigned_tx.attributes = config.attributes;
+        }
+
+        self.sign_transaction(&mut tx);
+        self.send_raw_transaction(&tx).await
     }
 
-    async fn transfer_name(
+    pub async fn transfer_name(
         &self,
         name: &str,
         recipient_public_key: &[u8],
         config: TransactionConfig,
     ) -> Result<String, String> {
-        transfer_name(self, name, recipient_public_key, config).await
+        let nonce = if config.nonce > 0 {
+            config.nonce
+        } else {
+            self.nonce(true).await?
+        };
+
+        let mut tx = Transaction::new_transfer_name(
+            self.public_key(),
+            recipient_public_key,
+            name,
+            nonce,
+            config.fee,
+        );
+
+        if config.attributes.len() > 0 {
+            tx.unsigned_tx.attributes = config.attributes;
+        }
+
+        self.sign_transaction(&mut tx);
+        self.send_raw_transaction(&tx).await
     }
 
-    async fn delete_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
-        delete_name(self, name, config).await
+    pub async fn delete_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
+        let nonce = if config.nonce > 0 {
+            config.nonce
+        } else {
+            self.nonce(true).await?
+        };
+
+        let mut tx = Transaction::new_delete_name(self.public_key(), name, nonce, config.fee);
+
+        if config.attributes.len() > 0 {
+            tx.unsigned_tx.attributes = config.attributes;
+        }
+
+        self.sign_transaction(&mut tx);
+        self.send_raw_transaction(&tx).await
     }
 
-    async fn subscribe(
+    pub async fn subscribe(
         &self,
         identifier: &str,
         topic: &str,
@@ -894,15 +961,67 @@ impl SignerRPCClient for Client {
         meta: &str,
         config: TransactionConfig,
     ) -> Result<String, String> {
-        subscribe(self, identifier, topic, duration, meta, config).await
+        let nonce = if config.nonce > 0 {
+            config.nonce
+        } else {
+            self.nonce(true).await?
+        };
+
+        let mut tx = Transaction::new_subscribe(
+            self.public_key(),
+            identifier,
+            topic,
+            duration,
+            meta,
+            nonce,
+            config.fee,
+        );
+
+        if config.attributes.len() > 0 {
+            tx.unsigned_tx.attributes = config.attributes;
+        }
+
+        self.sign_transaction(&mut tx);
+        self.send_raw_transaction(&tx).await
     }
 
-    async fn unsubscribe(
+    pub async fn unsubscribe(
         &self,
         identifier: &str,
         topic: &str,
         config: TransactionConfig,
     ) -> Result<String, String> {
-        unsubscribe(self, identifier, topic, config).await
+        let nonce = if config.nonce > 0 {
+            config.nonce
+        } else {
+            self.nonce(true).await?
+        };
+
+        let mut tx = Transaction::new_unsubscribe(self.public_key(), identifier, topic, nonce, config.fee);
+
+        if config.attributes.len() > 0 {
+            tx.unsigned_tx.attributes = config.attributes;
+        }
+
+        self.sign_transaction(&mut tx);
+        self.send_raw_transaction(&tx).await
+    }
+}
+
+impl AccountHolder for Client {
+    fn account(&self) -> &Account {
+        &self.account
+    }
+
+    fn seed(&self) -> [u8; SEED_LEN] {
+        self.account.seed()
+    }
+
+    fn address(&self) -> String {
+        self.address.clone()
+    }
+
+    fn program_hash(&self) -> &[u8] {
+        self.account.program_hash()
     }
 }

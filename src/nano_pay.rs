@@ -1,6 +1,6 @@
 use crate::program::{code_hash_to_address, to_script_hash};
 use crate::rpc::{
-    get_balance, get_height, send_raw_transaction, RPCClient, RPCConfig, SignerRPCClient,
+    get_balance, get_height, send_raw_transaction, RPCConfig,
 };
 use crate::transaction::{unpack_payload_data, Payload, Transaction};
 use crate::vault::{AccountHolder, Wallet};

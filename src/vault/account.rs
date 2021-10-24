@@ -4,7 +4,6 @@ use crate::crypto::{
     SEED_LEN,
 };
 use crate::program::{code_hash_to_address, create_program_hash};
-use crate::signature::Signer;
 
 use rand::Rng;
 
@@ -38,6 +37,14 @@ impl Account {
         Self::new(&seed)
     }
 
+    pub fn private_key(&self) -> &[u8] {
+        &self.private_key
+    }
+
+    pub fn public_key(&self) -> &[u8] {
+        &self.public_key
+    }
+
     pub fn seed(&self) -> [u8; SEED_LEN] {
         ed25519_seed_from_private_key(&self.private_key)
     }
@@ -48,16 +55,6 @@ impl Account {
 
     pub fn wallet_address(&self) -> String {
         code_hash_to_address(&self.program_hash)
-    }
-}
-
-impl Signer for Account {
-    fn private_key(&self) -> &[u8] {
-        &self.private_key
-    }
-
-    fn public_key(&self) -> &[u8] {
-        &self.public_key
     }
 }
 
