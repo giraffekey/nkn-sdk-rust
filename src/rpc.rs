@@ -137,11 +137,11 @@ pub async fn rpc_call<S: Serialize, D: DeserializeOwned + Send + 'static>(
         .unwrap()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Node {
-    pub address: String,
-    pub rpc_address: String,
-    pub public_key: Vec<u8>,
+    pub addr: String,
+    pub rpc_addr: String,
+    pub pub_key: Vec<u8>,
     pub id: String,
 }
 
@@ -174,8 +174,8 @@ impl ToString for SyncState {
 
 #[derive(Debug, Deserialize)]
 pub struct NodeState {
-    pub address: String,
-    pub current_timestamp: u64,
+    pub addr: String,
+    pub curr_time_stamp: u64,
     pub height: u32,
     pub id: String,
     pub json_rpc_port: u32,

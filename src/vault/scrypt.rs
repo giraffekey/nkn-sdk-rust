@@ -5,7 +5,7 @@ pub const SCRYPT_LOG_N: u8 = 15;
 pub const SCRYPT_R: u32 = 8;
 pub const SCRYPT_P: u32 = 1;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScryptConfig {
     pub log_n: u8,
     pub r: u32,

@@ -1,7 +1,5 @@
 use crate::program::{code_hash_to_address, to_script_hash};
-use crate::rpc::{
-    get_balance, get_height, send_raw_transaction, RPCConfig,
-};
+use crate::rpc::{get_balance, get_height, send_raw_transaction, RPCConfig};
 use crate::transaction::{unpack_payload_data, Payload, Transaction};
 use crate::vault::{AccountHolder, Wallet};
 
@@ -24,9 +22,9 @@ fn clone_rpc_config(rpc_config: &RPCConfig) -> RPCConfig {
     }
 }
 
-pub struct NanoPay<'a> {
+pub struct NanoPay {
     rpc_config: RPCConfig,
-    wallet: &'a Wallet,
+    wallet: Wallet,
     recipient_address: String,
     recipient_program_hash: Vec<u8>,
     fee: i64,
@@ -36,10 +34,10 @@ pub struct NanoPay<'a> {
     expiration: u64,
 }
 
-impl<'a> NanoPay<'a> {
+impl NanoPay {
     pub fn new(
         rpc_config: RPCConfig,
-        wallet: &'a Wallet,
+        wallet: Wallet,
         recipient_address: &str,
         fee: i64,
         duration: u64,

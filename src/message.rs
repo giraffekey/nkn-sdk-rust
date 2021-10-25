@@ -78,7 +78,7 @@ pub struct PayloadMessage {
     pub encrypted_key: Vec<u8>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MessageConfig {
     pub unencrypted: bool,
     pub no_reply: bool,

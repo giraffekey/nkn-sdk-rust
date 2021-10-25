@@ -22,7 +22,7 @@ fn get_password_key(
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ScryptConfigEncoded {
     pub log_n: u8,
     pub r: u32,
@@ -51,7 +51,7 @@ fn decode_scrypt_config(scrypt: &ScryptConfigEncoded) -> ScryptConfig {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WalletData {
     pub version: u32,
     pub iv: String,

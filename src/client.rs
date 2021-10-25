@@ -1,5 +1,7 @@
-use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER, MIN_NAME_REGISTRATION_FEE};
-use crate::program::{create_program_hash, to_script_hash};
+use crate::constant::{
+    DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER,
+    MIN_NAME_REGISTRATION_FEE,
+};
 use crate::crypto::{
     aes_decrypt, aes_encrypt, ed25519_exchange, ed25519_private_key_to_curve25519_private_key,
     ed25519_public_key_to_curve25519_public_key, ed25519_sign, sha256_hash, IV_LEN, PUBLIC_KEY_LEN,
@@ -7,10 +9,11 @@ use crate::crypto::{
 };
 use crate::message::{Message, MessageConfig, MessagePayload, PayloadMessage};
 use crate::nano_pay::{NanoPay, NanoPayClaimer};
+use crate::program::{create_program_hash, to_script_hash};
 use crate::rpc::{
-    get_balance, get_height, get_nonce, get_registrant, get_subscribers,
-    get_subscribers_count, get_subscription, send_raw_transaction, Node, Registrant,
-    Subscribers, Subscription,
+    get_balance, get_height, get_node_state, get_nonce, get_registrant, get_subscribers,
+    get_subscribers_count, get_subscription, get_ws_address, send_raw_transaction, Node, RPCConfig,
+    Registrant, Subscribers, Subscription, SyncState,
 };
 use crate::sigchain::{SigAlgo, SigChain, SigChainElement};
 use crate::transaction::{Transaction, TransactionConfig};
@@ -18,18 +21,26 @@ use crate::util::{client_config_to_rpc_config, wallet_config_to_rpc_config};
 use crate::vault::{Account, AccountHolder, Wallet, WalletConfig};
 
 use flate2::{write::ZlibEncoder, Compression};
+use futures_util::{future, pin_mut, StreamExt};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    io::Write,
-    str,
-    sync::{Arc, Mutex, mpsc::{channel, Sender, Receiver}},
-    time::Duration,
+use serde_json::json;
+use std::collections::HashMap;
+use std::io::Write;
+use std::str;
+use std::sync::{
+    mpsc::{channel, Receiver, Sender},
+    Arc, Mutex,
 };
+use std::time::Duration;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::{task, time::sleep};
+use tokio_tungstenite::{connect_async, tungstenite::protocol::Message as WsMessage};
+use url::Url;
 
 const MAX_CLIENT_MESSAGE_SIZE: usize = 4000000;
+const PING_INTERVAL: u64 = 8;
+const PONG_TIMEOUT: u64 = 10;
 
 #[derive(Debug, Deserialize, Serialize)]
 enum ClientMessageType {
@@ -86,7 +97,7 @@ fn parse_client_address(address_str: &str) -> Result<([u8; SHA256_LEN], Vec<u8>,
     Ok((client_id, public_key, identifier))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClientConfig {
     pub rpc_server_address: Vec<String>,
     pub rpc_timeout: Duration,
@@ -124,18 +135,307 @@ impl Default for ClientConfig {
     }
 }
 
+fn close(closed: &Arc<Mutex<bool>>) {
+    *closed.lock().unwrap() = true;
+    todo!(); // close connection
+}
+
+async fn handle_message(
+    is_text: bool,
+    data: Vec<u8>,
+    closed: Arc<Mutex<bool>>,
+) -> Result<(), String> {
+    if *closed.lock().unwrap() {
+        return Ok(());
+    }
+
+    if is_text {
+        todo!()
+    } else {
+        todo!()
+    }
+}
+
+async fn connect_to_node(
+    node: Node,
+    address: String,
+    config: Arc<Mutex<ClientConfig>>,
+    closed: Arc<Mutex<bool>>,
+    client_node: Arc<Mutex<Option<Node>>>,
+    wallet: Arc<Mutex<Wallet>>,
+    reconnect_tx: Sender<()>,
+) -> Result<(), String> {
+    let handle = if !node.rpc_addr.is_empty() {
+        let node = node.clone();
+        let config = config.clone();
+
+        let handle = task::spawn(async move {
+            let addr = format!("http://{}", node.rpc_addr);
+
+            let ws_handshake_timeout = config.lock().unwrap().ws_handshake_timeout;
+            let node_state = match get_node_state(RPCConfig {
+                rpc_server_address: vec![addr.clone()],
+                rpc_timeout: Duration::from_secs(ws_handshake_timeout),
+                ..RPCConfig::default()
+            })
+            .await
+            {
+                Ok(node_state) => node_state,
+                Err(_) => return None,
+            };
+
+            if node_state.sync_state != SyncState::PersistFinished.to_string() {
+                return None;
+            }
+
+            Some(addr)
+        });
+        Some(handle)
+    } else {
+        None
+    };
+
+    let (stdin_tx, stdin_rx) = futures_channel::mpsc::unbounded();
+
+    let url = Url::parse(&format!("ws://{}", node.addr)).unwrap();
+    let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+    let (write, read) = ws_stream.split();
+
+    let stdin_to_ws = stdin_rx.map(Ok).forward(write);
+    let ws_to_stdout = {
+        read.for_each(|message| async {
+            let data = match message.unwrap() {
+                WsMessage::Text(text) => {
+                    let mut data = text.as_bytes().to_vec();
+                    data.push(0);
+                    data
+                }
+                WsMessage::Binary(mut data) => {
+                    data.push(1);
+                    data
+                }
+                _ => Vec::new(),
+            };
+            tokio::io::stdout().write_all(&data).await.unwrap();
+        })
+    };
+
+    // *conn.lock().unwrap() = ;
+    *client_node.lock().unwrap() = Some(node);
+
+    match handle {
+        Some(handle) => match handle.await.unwrap() {
+            Some(rpc_addr) => {
+                let rpc_server_address = if rpc_addr.is_empty() {
+                    Vec::new()
+                } else {
+                    vec![rpc_addr]
+                };
+
+                let mut wallet = wallet.lock().unwrap();
+                let config = wallet.config().clone();
+                wallet.set_config(WalletConfig {
+                    rpc_server_address,
+                    password: String::new(),
+                    master_key: Vec::new(),
+                    scrypt: config.scrypt.clone(),
+                    ..config
+                });
+            }
+            None => (),
+        },
+        None => (),
+    }
+
+    let done = Arc::new(Mutex::new(false));
+
+    let done_clone = done.clone();
+    let stdin_tx_clone = stdin_tx.clone();
+    let reconnect_tx_clone = reconnect_tx.clone();
+    task::spawn(async move {
+        loop {
+            if *done_clone.lock().unwrap() {
+                return;
+            }
+
+            sleep(Duration::from_secs(PING_INTERVAL)).await;
+
+            let res = stdin_tx_clone.unbounded_send(WsMessage::Ping(Vec::new()));
+
+            if let Err(err) = res {
+                log::error!("Error: {}", err);
+                reconnect_tx_clone.send(());
+                return;
+            }
+        }
+    });
+
+    let reconnect_tx_clone = reconnect_tx.clone();
+    task::spawn(async move {
+        let req_bytes = json!({
+            "Action": "setClient",
+            "Addr": address,
+        })
+        .to_string()
+        .as_bytes()
+        .to_vec();
+
+        let res = stdin_tx.unbounded_send(WsMessage::Binary(req_bytes));
+
+        if let Err(err) = res {
+            log::error!("Error: {}", err);
+            reconnect_tx_clone.send(());
+            return;
+        }
+    });
+
+    let closed_clone = closed.clone();
+    task::spawn(async move {
+        let mut stdin = tokio::io::stdin();
+
+        loop {
+            if *closed_clone.lock().unwrap() {
+                return;
+            }
+
+            let mut data = vec![0; MAX_CLIENT_MESSAGE_SIZE];
+            let n = match stdin.read(&mut data).await {
+                Ok(n) => n,
+                Err(_) | Ok(0) => break,
+            };
+            data.truncate(n);
+
+            let is_text = data.pop().unwrap() == 0;
+            let res = handle_message(is_text, data, closed.clone()).await;
+
+            if let Err(err) = res {
+                log::error!("Error: {}", err);
+            }
+        }
+
+        *done.lock().unwrap() = true;
+    });
+
+    task::spawn(async move {
+        pin_mut!(stdin_to_ws, ws_to_stdout);
+        future::select(stdin_to_ws, ws_to_stdout).await;
+    });
+
+    Ok(())
+}
+
+async fn connect(
+    max_retries: u32,
+    address: String,
+    config: Arc<Mutex<ClientConfig>>,
+    closed: Arc<Mutex<bool>>,
+    client_node: Arc<Mutex<Option<Node>>>,
+    wallet: Arc<Mutex<Wallet>>,
+    reconnect_tx: Sender<()>,
+) -> Result<(), String> {
+    let max_reconnect_interval = config.lock().unwrap().max_reconnect_interval;
+
+    let mut retry_interval = config.lock().unwrap().min_reconnect_interval;
+    let mut retry = 0;
+
+    while max_retries == 0 || retry < max_retries {
+        if retry > 0 {
+            log::info!("Retry in {} ms...", retry_interval);
+            sleep(Duration::from_millis(retry_interval)).await;
+
+            retry_interval *= 2;
+            if retry_interval > max_reconnect_interval {
+                retry_interval = max_reconnect_interval;
+            }
+        }
+
+        let rpc_config = client_config_to_rpc_config(&config.lock().unwrap());
+        let res = get_ws_address(
+            &address,
+            rpc_config,
+        )
+        .await;
+
+        match res {
+            Ok(node) => {
+                let reconnect_tx_clone = reconnect_tx.clone();
+                let res = connect_to_node(
+                    node,
+                    address.clone(),
+                    config.clone(),
+                    closed.clone(),
+                    client_node.clone(),
+                    wallet.clone(),
+                    reconnect_tx_clone,
+                )
+                .await;
+
+                match res {
+                    Ok(()) => return Ok(()),
+                    Err(err) => log::error!("Error: {}", err),
+                }
+            }
+            Err(err) => log::error!("Error: {}", err),
+        }
+
+        retry += 1;
+    }
+
+    Err("connect failed".into())
+}
+
+async fn handle_reconnect(
+    reconnect_rx: Receiver<()>,
+    address: String,
+    config: Arc<Mutex<ClientConfig>>,
+    closed: Arc<Mutex<bool>>,
+    client_node: Arc<Mutex<Option<Node>>>,
+    wallet: Arc<Mutex<Wallet>>,
+    reconnect_tx: Sender<()>,
+) {
+    loop {
+        reconnect_rx.recv().unwrap();
+
+        if *closed.lock().unwrap() {
+            return;
+        }
+
+        let min_reconnect_interval = config.lock().unwrap().min_reconnect_interval;
+        log::info!("Reconnect in {} ms...", min_reconnect_interval);
+        sleep(Duration::from_millis(min_reconnect_interval)).await;
+
+        let reconnect_tx_clone = reconnect_tx.clone();
+        let res = connect(
+            0,
+            address.clone(),
+            config.clone(),
+            closed.clone(),
+            client_node.clone(),
+            wallet.clone(),
+            reconnect_tx_clone,
+        )
+        .await;
+
+        if let Err(err) = res {
+            log::error!("Error: {}", err);
+            close(&closed);
+        }
+    }
+}
+
 pub struct Client {
-    config: ClientConfig,
+    config: Arc<Mutex<ClientConfig>>,
+    wallet: Arc<Mutex<Wallet>>,
     account: Account,
-    wallet: Wallet,
     address: String,
     address_id: [u8; SHA256_LEN],
     curve_secret_key: [u8; SHARED_KEY_LEN],
     closed: Arc<Mutex<bool>>,
-    node: Option<Node>,
+    node: Arc<Mutex<Option<Node>>>,
     sig_chain_block_hash: Option<String>,
     connect_channel: (Sender<Node>, Receiver<Node>),
     message_channel: (Sender<Message>, Receiver<Message>),
+    reconnect_tx: Sender<()>,
     response_channels: HashMap<String, (Sender<Message>, Receiver<Message>)>,
     shared_keys: Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
 }
@@ -153,8 +453,6 @@ impl Client {
         let wallet = Wallet::new(account.clone(), wallet_config)?;
         let curve_secret_key = ed25519_private_key_to_curve25519_private_key(account.private_key());
 
-        let closed = Arc::new(Mutex::new(false));
-
         let pub_key_hex = hex::encode(account.public_key());
         let address = if let Some(identifier) = identifier {
             if identifier.is_empty() {
@@ -167,31 +465,77 @@ impl Client {
         };
         let address_id = sha256_hash(address.as_bytes());
 
+        let config = Arc::new(Mutex::new(config));
+        let closed = Arc::new(Mutex::new(false));
+        let node = Arc::new(Mutex::new(None));
+        let wallet = Arc::new(Mutex::new(wallet));
         let shared_keys = Arc::new(Mutex::new(HashMap::new()));
+
+        let (reconnect_tx, reconnect_rx) = channel();
+
+        let address_clone = address.clone();
+        let config_clone = config.clone();
+        let closed_clone = closed.clone();
+        let node_clone = node.clone();
+        let wallet_clone = wallet.clone();
+        let reconnect_tx_clone = reconnect_tx.clone();
+        task::spawn(async move {
+            handle_reconnect(
+                reconnect_rx,
+                address_clone,
+                config_clone,
+                closed_clone,
+                node_clone,
+                wallet_clone,
+                reconnect_tx_clone,
+            )
+            .await;
+        });
+
+        let address_clone = address.clone();
+        let config_clone = config.clone();
+        let closed_clone = closed.clone();
+        let node_clone = node.clone();
+        let wallet_clone = wallet.clone();
+        let reconnect_tx_clone = reconnect_tx.clone();
+        task::spawn(async move {
+            connect(
+                0,
+                address_clone,
+                config_clone,
+                closed_clone,
+                node_clone,
+                wallet_clone,
+                reconnect_tx_clone,
+            )
+            .await
+            .unwrap();
+        });
 
         Ok(Self {
             config,
             account,
-            wallet,
             address,
             address_id,
             curve_secret_key,
+            wallet,
             closed,
-            node: None,
+            node,
             sig_chain_block_hash: None,
             connect_channel: channel(),
             message_channel: channel(),
+            reconnect_tx,
             response_channels: HashMap::new(),
             shared_keys,
         })
     }
 
-    pub fn config(&self) -> &ClientConfig {
-        &self.config
+    pub fn config(&self) -> ClientConfig {
+        self.config.lock().unwrap().clone()
     }
 
     pub fn set_config(&mut self, config: ClientConfig) {
-        self.config = config;
+        *self.config.lock().unwrap() = config;
     }
 
     pub fn private_key(&self) -> &[u8] {
@@ -207,8 +551,7 @@ impl Client {
     }
 
     pub fn close(&mut self) {
-        *self.closed.lock().unwrap() = true;
-        todo!()
+        close(&self.closed);
     }
 
     pub fn connection(&self) {
@@ -226,7 +569,16 @@ impl Client {
     }
 
     async fn connect(&self, max_retries: u32) -> Result<(), String> {
-        todo!()
+        connect(
+            max_retries,
+            self.address.clone(),
+            self.config.clone(),
+            self.closed.clone(),
+            self.node.clone(),
+            self.wallet.clone(),
+            self.reconnect_tx.clone(),
+        )
+        .await
     }
 
     pub async fn reconnect(&mut self) -> Result<(), String> {
@@ -234,19 +586,13 @@ impl Client {
             return Ok(());
         }
 
-        log::info!("Reconnect in {} ms...", self.config.min_reconnect_interval);
-        sleep(Duration::from_millis(self.config.min_reconnect_interval)).await;
+        self.reconnect_tx.send(());
 
-        if let Err(err) = self.connect(0).await {
-            self.close();
-            Err(err)
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 
-    pub fn node(&self) -> &Option<Node> {
-        &self.node
+    pub fn node(&self) -> Option<Node> {
+        self.node.lock().unwrap().clone()
     }
 
     fn get_or_compute_shared_key(
@@ -432,7 +778,8 @@ impl Client {
             payloads: payloads.iter().map(|v| v.to_vec()).collect(),
         };
 
-        let node_public_key = hex::decode(&self.node.as_ref().unwrap().public_key).unwrap();
+        let node_public_key =
+            hex::decode(&self.node.lock().unwrap().as_ref().unwrap().pub_key).unwrap();
         let sig_chain_element = SigChainElement {
             id: Vec::new(),
             next_pubkey: node_public_key,
@@ -641,7 +988,7 @@ impl Client {
             payload,
             !config.unencrypted,
             config.max_holding_seconds,
-            self.config.ws_write_timeout,
+            self.config.lock().unwrap().ws_write_timeout,
         )
         .await?;
 
@@ -668,10 +1015,22 @@ impl Client {
         self.publish(topic, payload, config).await
     }
 
-    pub async fn send(&mut self, dests: &[&str], payload: MessagePayload, config: MessageConfig) -> Result<(), String> {
+    pub async fn send(
+        &mut self,
+        dests: &[&str],
+        payload: MessagePayload,
+        config: MessageConfig,
+    ) -> Result<(), String> {
         let message_id = payload.message_id.clone();
 
-        self.send_messages(dests, payload, !config.unencrypted, config.max_holding_seconds, self.config.ws_write_timeout).await?;
+        self.send_messages(
+            dests,
+            payload,
+            !config.unencrypted,
+            config.max_holding_seconds,
+            self.config.lock().unwrap().ws_write_timeout,
+        )
+        .await?;
 
         if !config.no_reply {
             let message_id = str::from_utf8(&message_id).unwrap();
@@ -681,12 +1040,22 @@ impl Client {
         Ok(())
     }
 
-    pub async fn send_binary(&mut self, dests: &[&str], data: &[u8], config: MessageConfig) -> Result<(), String> {
+    pub async fn send_binary(
+        &mut self,
+        dests: &[&str],
+        data: &[u8],
+        config: MessageConfig,
+    ) -> Result<(), String> {
         let payload = MessagePayload::new_binary(data, &config.message_id, &[], true);
         self.send(dests, payload, config).await
     }
 
-    pub async fn send_text(&mut self, dests: &[&str], text: &str, config: MessageConfig) -> Result<(), String> {
+    pub async fn send_text(
+        &mut self,
+        dests: &[&str],
+        text: &str,
+        config: MessageConfig,
+    ) -> Result<(), String> {
         let payload = MessagePayload::new_text(text, &config.message_id, &[], true);
         self.send(dests, payload, config).await
     }
@@ -702,8 +1071,8 @@ impl Client {
         duration: u64,
     ) -> Result<NanoPay, String> {
         NanoPay::new(
-            client_config_to_rpc_config(&self.config),
-            &self.wallet,
+            client_config_to_rpc_config(&self.config.lock().unwrap()),
+            self.wallet.lock().unwrap().clone(),
             recipient_address,
             fee,
             duration,
@@ -717,12 +1086,12 @@ impl Client {
         min_flush_amount: i64,
     ) -> Result<NanoPayClaimer, String> {
         let recipient_address = if recipient_address.is_empty() {
-            self.wallet.address()
+            self.wallet.lock().unwrap().address()
         } else {
             recipient_address.into()
         };
         NanoPayClaimer::new(
-            client_config_to_rpc_config(&self.config),
+            client_config_to_rpc_config(&self.config.lock().unwrap()),
             &recipient_address,
             claim_interval_ms,
             min_flush_amount,
@@ -730,46 +1099,53 @@ impl Client {
     }
 
     pub fn sign_transaction(&self, tx: &mut Transaction) {
-        self.wallet.sign_transaction(tx);
+        self.wallet.lock().unwrap().sign_transaction(tx);
     }
 
     pub async fn nonce(&self, tx_pool: bool) -> Result<u64, String> {
-        self.nonce_by_address(&self.wallet.address(), tx_pool).await
+        self.nonce_by_address(&self.wallet.lock().unwrap().address(), tx_pool).await
     }
 
     pub async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> Result<u64, String> {
-        let wallet_config = self.wallet.config();
+        let wallet = self.wallet.lock().unwrap();
+        let wallet_config = wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
-            get_nonce(address, tx_pool, client_config_to_rpc_config(&self.config)).await
-        } else {
             get_nonce(
                 address,
                 tx_pool,
-                wallet_config_to_rpc_config(&wallet_config),
+                client_config_to_rpc_config(&self.config.lock().unwrap()),
             )
             .await
+        } else {
+            get_nonce(address, tx_pool, wallet_config_to_rpc_config(wallet_config)).await
         }
     }
 
     pub async fn balance(&self) -> Result<i64, String> {
-        self.balance_by_address(&self.wallet.address()).await
+        self.balance_by_address(&self.wallet.lock().unwrap().address()).await
     }
 
     pub async fn balance_by_address(&self, address: &str) -> Result<i64, String> {
-        let wallet_config = self.wallet.config();
+        let wallet = self.wallet.lock().unwrap();
+        let wallet_config = wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
-            get_balance(address, client_config_to_rpc_config(&self.config)).await
+            get_balance(
+                address,
+                client_config_to_rpc_config(&self.config.lock().unwrap()),
+            )
+            .await
         } else {
-            get_balance(address, wallet_config_to_rpc_config(&wallet_config)).await
+            get_balance(address, wallet_config_to_rpc_config(wallet_config)).await
         }
     }
 
     pub async fn height(&self) -> Result<u64, String> {
-        let wallet_config = self.wallet.config();
+        let wallet = self.wallet.lock().unwrap();
+        let wallet_config = wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
-            get_height(client_config_to_rpc_config(&self.config)).await
+            get_height(client_config_to_rpc_config(&self.config.lock().unwrap())).await
         } else {
-            get_height(wallet_config_to_rpc_config(&wallet_config)).await
+            get_height(wallet_config_to_rpc_config(wallet_config)).await
         }
     }
 
@@ -781,7 +1157,8 @@ impl Client {
         meta: bool,
         tx_pool: bool,
     ) -> Result<Subscribers, String> {
-        let wallet_config = self.wallet.config();
+        let wallet = self.wallet.lock().unwrap();
+        let wallet_config = wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
             get_subscribers(
                 topic,
@@ -789,7 +1166,7 @@ impl Client {
                 limit,
                 meta,
                 tx_pool,
-                client_config_to_rpc_config(&self.config),
+                client_config_to_rpc_config(&self.config.lock().unwrap()),
             )
             .await
         } else {
@@ -799,21 +1176,31 @@ impl Client {
                 limit,
                 meta,
                 tx_pool,
-                wallet_config_to_rpc_config(&wallet_config),
+                wallet_config_to_rpc_config(wallet_config),
             )
             .await
         }
     }
 
-    pub async fn subscription(&self, topic: &str, subscriber: &str) -> Result<Subscription, String> {
-        let wallet_config = self.wallet.config();
+    pub async fn subscription(
+        &self,
+        topic: &str,
+        subscriber: &str,
+    ) -> Result<Subscription, String> {
+        let wallet = self.wallet.lock().unwrap();
+        let wallet_config = wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
-            get_subscription(topic, subscriber, client_config_to_rpc_config(&self.config)).await
+            get_subscription(
+                topic,
+                subscriber,
+                client_config_to_rpc_config(&self.config.lock().unwrap()),
+            )
+            .await
         } else {
             get_subscription(
                 topic,
                 subscriber,
-                wallet_config_to_rpc_config(&wallet_config),
+                wallet_config_to_rpc_config(wallet_config),
             )
             .await
         }
@@ -824,39 +1211,50 @@ impl Client {
         topic: &str,
         subscriber_hash_prefix: &[u8],
     ) -> Result<u32, String> {
-        let wallet_config = self.wallet.config();
+        let wallet = self.wallet.lock().unwrap();
+        let wallet_config = wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
             get_subscribers_count(
                 topic,
                 subscriber_hash_prefix,
-                client_config_to_rpc_config(&self.config),
+                client_config_to_rpc_config(&self.config.lock().unwrap()),
             )
             .await
         } else {
             get_subscribers_count(
                 topic,
                 subscriber_hash_prefix,
-                wallet_config_to_rpc_config(&wallet_config),
+                wallet_config_to_rpc_config(wallet_config),
             )
             .await
         }
     }
 
     pub async fn registrant(&self, name: &str) -> Result<Registrant, String> {
-        let wallet_config = self.wallet.config();
+        let wallet = self.wallet.lock().unwrap();
+        let wallet_config = wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
-            get_registrant(name, client_config_to_rpc_config(&self.config)).await
+            get_registrant(
+                name,
+                client_config_to_rpc_config(&self.config.lock().unwrap()),
+            )
+            .await
         } else {
-            get_registrant(name, wallet_config_to_rpc_config(&wallet_config)).await
+            get_registrant(name, wallet_config_to_rpc_config(wallet_config)).await
         }
     }
 
     pub async fn send_raw_transaction(&self, txn: &Transaction) -> Result<String, String> {
-        let wallet_config = self.wallet.config();
+        let wallet = self.wallet.lock().unwrap();
+        let wallet_config = wallet.config();
         if wallet_config.rpc_server_address.is_empty() {
-            send_raw_transaction(txn, client_config_to_rpc_config(&self.config)).await
+            send_raw_transaction(
+                txn,
+                client_config_to_rpc_config(&self.config.lock().unwrap()),
+            )
+            .await
         } else {
-            send_raw_transaction(txn, wallet_config_to_rpc_config(&wallet_config)).await
+            send_raw_transaction(txn, wallet_config_to_rpc_config(wallet_config)).await
         }
     }
 
@@ -875,7 +1273,8 @@ impl Client {
             self.nonce(true).await?
         };
 
-        let mut tx = Transaction::new_transfer_asset(&sender, &recipient, nonce, amount, config.fee);
+        let mut tx =
+            Transaction::new_transfer_asset(&sender, &recipient, nonce, amount, config.fee);
 
         if config.attributes.len() > 0 {
             tx.unsigned_tx.attributes = config.attributes;
@@ -885,7 +1284,11 @@ impl Client {
         self.send_raw_transaction(&tx).await
     }
 
-    pub async fn register_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
+    pub async fn register_name(
+        &self,
+        name: &str,
+        config: TransactionConfig,
+    ) -> Result<String, String> {
         let nonce = if config.nonce > 0 {
             config.nonce
         } else {
@@ -936,7 +1339,11 @@ impl Client {
         self.send_raw_transaction(&tx).await
     }
 
-    pub async fn delete_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
+    pub async fn delete_name(
+        &self,
+        name: &str,
+        config: TransactionConfig,
+    ) -> Result<String, String> {
         let nonce = if config.nonce > 0 {
             config.nonce
         } else {
@@ -997,7 +1404,8 @@ impl Client {
             self.nonce(true).await?
         };
 
-        let mut tx = Transaction::new_unsubscribe(self.public_key(), identifier, topic, nonce, config.fee);
+        let mut tx =
+            Transaction::new_unsubscribe(self.public_key(), identifier, topic, nonce, config.fee);
 
         if config.attributes.len() > 0 {
             tx.unsigned_tx.attributes = config.attributes;

@@ -1,11 +1,15 @@
-use crate::constant::{DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER, MIN_NAME_REGISTRATION_FEE};
+use crate::constant::{
+    DEFAULT_RPC_CONCURRENCY, DEFAULT_RPC_TIMEOUT, DEFAULT_SEED_RPC_SERVER,
+    MIN_NAME_REGISTRATION_FEE,
+};
 use crate::crypto::{IV_LEN, SEED_LEN};
 use crate::nano_pay::{NanoPay, NanoPayClaimer};
-use crate::program::{create_signature_program_context, create_program_hash, to_script_hash, Program};
+use crate::program::{
+    create_program_hash, create_signature_program_context, to_script_hash, Program,
+};
 use crate::rpc::{
-    get_balance, get_height, get_nonce, get_registrant, get_subscribers,
-    get_subscribers_count, get_subscription, send_raw_transaction, RPCConfig, Registrant,
-    Subscribers, Subscription,
+    get_balance, get_height, get_nonce, get_registrant, get_subscribers, get_subscribers_count,
+    get_subscription, send_raw_transaction, RPCConfig, Registrant, Subscribers, Subscription,
 };
 use crate::signature::{sign, SignableData};
 use crate::transaction::{Transaction, TransactionConfig};
@@ -18,7 +22,7 @@ use crate::vault::{Account, AccountHolder, ScryptConfig};
 use rand::Rng;
 use std::{sync::Arc, time::Duration};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct WalletConfig {
     pub rpc_server_address: Vec<String>,
     pub rpc_timeout: Duration,
@@ -52,6 +56,7 @@ impl Default for WalletConfig {
     }
 }
 
+#[derive(Clone)]
 pub struct Wallet {
     config: WalletConfig,
     account: Account,
@@ -65,7 +70,7 @@ impl Wallet {
             &config.password,
             &config.master_key,
             config.iv,
-            ScryptConfig { ..config.scrypt },
+            config.scrypt.clone(),
         )?;
 
         let config = WalletConfig {
@@ -146,7 +151,7 @@ impl Wallet {
     ) -> Result<NanoPay, String> {
         NanoPay::new(
             wallet_config_to_rpc_config(&self.config),
-            self,
+            self.clone(),
             recipient_address,
             fee,
             duration,
@@ -217,7 +222,11 @@ impl Wallet {
         .await
     }
 
-    pub async fn subscription(&self, topic: &str, subscriber: &str) -> Result<Subscription, String> {
+    pub async fn subscription(
+        &self,
+        topic: &str,
+        subscriber: &str,
+    ) -> Result<Subscription, String> {
         get_subscription(topic, subscriber, wallet_config_to_rpc_config(&self.config)).await
     }
 
@@ -257,7 +266,8 @@ impl Wallet {
             self.nonce(true).await?
         };
 
-        let mut tx = Transaction::new_transfer_asset(&sender, &recipient, nonce, amount, config.fee);
+        let mut tx =
+            Transaction::new_transfer_asset(&sender, &recipient, nonce, amount, config.fee);
 
         if config.attributes.len() > 0 {
             tx.unsigned_tx.attributes = config.attributes;
@@ -267,7 +277,11 @@ impl Wallet {
         self.send_raw_transaction(&tx).await
     }
 
-    pub async fn register_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
+    pub async fn register_name(
+        &self,
+        name: &str,
+        config: TransactionConfig,
+    ) -> Result<String, String> {
         let nonce = if config.nonce > 0 {
             config.nonce
         } else {
@@ -318,7 +332,11 @@ impl Wallet {
         self.send_raw_transaction(&tx).await
     }
 
-    pub async fn delete_name(&self, name: &str, config: TransactionConfig) -> Result<String, String> {
+    pub async fn delete_name(
+        &self,
+        name: &str,
+        config: TransactionConfig,
+    ) -> Result<String, String> {
         let nonce = if config.nonce > 0 {
             config.nonce
         } else {
@@ -379,7 +397,8 @@ impl Wallet {
             self.nonce(true).await?
         };
 
-        let mut tx = Transaction::new_unsubscribe(self.public_key(), identifier, topic, nonce, config.fee);
+        let mut tx =
+            Transaction::new_unsubscribe(self.public_key(), identifier, topic, nonce, config.fee);
 
         if config.attributes.len() > 0 {
             tx.unsigned_tx.attributes = config.attributes;
