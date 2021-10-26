@@ -530,14 +530,44 @@ async fn send_messages(
     Ok(())
 }
 
-async fn send_receipt(prev_signature: &[u8]) -> Result<(), String> {
-    todo!()
+async fn send_receipt(prev_signature: &[u8], private_key: &[u8]) -> Result<(), String> {
+    let sig_chain_element = SigChainElement {
+        id: Vec::new(),
+        next_pubkey: Vec::new(),
+        mining: false,
+        signature: Vec::new(),
+        sig_algo: SigAlgo::Signature,
+        vrf: Vec::new(),
+        proof: Vec::new(),
+    };
+    let sig_chain_element_ser = sig_chain_element.serialize_unsigned();
+
+    let mut digest = sha256_hash(&prev_signature).to_vec();
+    digest.extend_from_slice(&sig_chain_element_ser);
+    let digest = sha256_hash(&digest);
+    let signature = ed25519_sign(&private_key, &digest);
+
+    let receipt = Receipt {
+        prev_hash: prev_signature.to_vec(),
+        signature: signature.to_vec(),
+    };
+    let receipt_data = serde_json::to_vec(&receipt).unwrap();
+
+    let client_msg = ClientMessage {
+        message_type: ClientMessageType::Receipt,
+        message: receipt_data,
+        compression_type: CompressionType::CompressionNone,
+    };
+    let client_msg_data = serde_json::to_vec(&client_msg).unwrap();
+
+    write_message(&client_msg_data).await
 }
 
 async fn handle_message(
     is_text: bool,
     data: Vec<u8>,
     address: String,
+    private_key: Vec<u8>,
     config: Arc<Mutex<ClientConfig>>,
     closed: Arc<Mutex<bool>>,
     client_node: Arc<Mutex<Option<Node>>>,
@@ -630,7 +660,7 @@ async fn handle_message(
                 if !inbound_msg.prev_hash.is_empty() {
                     let prev_hash = inbound_msg.prev_hash;
                     task::spawn(async move {
-                        send_receipt(&prev_hash).await.unwrap();
+                        send_receipt(&prev_hash, &private_key).await.unwrap();
                     });
                 }
 
@@ -702,6 +732,7 @@ async fn handle_message(
 async fn connect_to_node(
     node: Node,
     address: String,
+    private_key: Vec<u8>,
     config: Arc<Mutex<ClientConfig>>,
     closed: Arc<Mutex<bool>>,
     client_node: Arc<Mutex<Option<Node>>>,
@@ -865,6 +896,7 @@ async fn connect_to_node(
                 is_text,
                 data,
                 address.clone(),
+                private_key.clone(),
                 config.clone(),
                 closed.clone(),
                 client_node.clone(),
@@ -899,6 +931,7 @@ async fn connect_to_node(
 async fn connect(
     max_retries: u32,
     address: String,
+    private_key: Vec<u8>,
     config: Arc<Mutex<ClientConfig>>,
     closed: Arc<Mutex<bool>>,
     client_node: Arc<Mutex<Option<Node>>>,
@@ -940,6 +973,7 @@ async fn connect(
                 let res = connect_to_node(
                     node,
                     address.clone(),
+                    private_key.clone(),
                     config.clone(),
                     closed.clone(),
                     client_node.clone(),
@@ -977,6 +1011,7 @@ fn close(closed: Arc<Mutex<bool>>) {
 async fn handle_reconnect(
     reconnect_rx: Receiver<()>,
     address: String,
+    private_key: Vec<u8>,
     config: Arc<Mutex<ClientConfig>>,
     closed: Arc<Mutex<bool>>,
     client_node: Arc<Mutex<Option<Node>>>,
@@ -1008,6 +1043,7 @@ async fn handle_reconnect(
         let res = connect(
             0,
             address.clone(),
+            private_key.clone(),
             config.clone(),
             closed.clone(),
             client_node.clone(),
@@ -1125,6 +1161,7 @@ impl Client {
         let (reconnect_tx, reconnect_rx) = channel();
 
         let address_clone = address.clone();
+        let private_key = account.private_key().to_vec();
         let config_clone = config.clone();
         let closed_clone = closed.clone();
         let node_clone = node.clone();
@@ -1141,6 +1178,7 @@ impl Client {
             handle_reconnect(
                 reconnect_rx,
                 address_clone,
+                private_key,
                 config_clone,
                 closed_clone,
                 node_clone,
@@ -1158,6 +1196,7 @@ impl Client {
         });
 
         let address_clone = address.clone();
+        let private_key = account.private_key().to_vec();
         let config_clone = config.clone();
         let closed_clone = closed.clone();
         let node_clone = node.clone();
@@ -1174,6 +1213,7 @@ impl Client {
             connect(
                 0,
                 address_clone,
+                private_key,
                 config_clone,
                 closed_clone,
                 node_clone,
@@ -1276,6 +1316,7 @@ impl Client {
         connect(
             max_retries,
             self.address.clone(),
+            self.private_key().to_vec(),
             self.config.clone(),
             self.closed.clone(),
             self.node.clone(),
