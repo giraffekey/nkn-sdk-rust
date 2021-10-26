@@ -24,6 +24,7 @@ use crate::util::{client_config_to_rpc_config, wallet_config_to_rpc_config};
 use crate::vault::{Account, AccountHolder, Wallet, WalletConfig};
 
 use flate2::{write::ZlibEncoder, Compression};
+use futures_channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures_util::{future, pin_mut, StreamExt};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
@@ -135,6 +136,7 @@ impl Default for ClientConfig {
 }
 
 type Channel<T> = (Sender<T>, Receiver<T>);
+type UnboundedChannel<T> = (UnboundedSender<T>, UnboundedReceiver<T>);
 
 fn parse_client_address(address_str: &str) -> Result<([u8; SHA256_LEN], Vec<u8>, String), String> {
     let client_id = sha256_hash(address_str.as_bytes());
@@ -256,10 +258,6 @@ fn decrypt_payload(
         let payload = aes_decrypt(&encrypted_payload, &shared_key, &msg.nonce);
         Ok(payload)
     }
-}
-
-async fn write_message(data: &[u8]) -> Result<(), String> {
-    todo!()
 }
 
 async fn process_dests(dests: &[&str], rpc_config: RPCConfig) -> Result<Vec<String>, String> {
@@ -429,6 +427,59 @@ fn create_client_message(outbound_msg: &OutboundMessage) -> Result<ClientMessage
     }
 }
 
+fn write_message(
+    data: &[u8],
+    stdin_tx: Arc<Mutex<Option<UnboundedSender<WsMessage>>>>,
+    reconnect_tx: Sender<()>,
+) -> Result<(), String> {
+    let res = stdin_tx.lock().unwrap().as_ref().unwrap().unbounded_send(WsMessage::Binary(data.to_vec()));
+
+    if let Err(err) = res {
+        reconnect_tx.send(()).unwrap();
+        Err("Websocket message failed".into())
+    } else {
+        Ok(())
+    }
+}
+
+fn send_receipt(
+    prev_signature: &[u8],
+    private_key: &[u8],
+    stdin_tx: Arc<Mutex<Option<UnboundedSender<WsMessage>>>>,
+    reconnect_tx: Sender<()>,
+) -> Result<(), String> {
+    let sig_chain_element = SigChainElement {
+        id: Vec::new(),
+        next_pubkey: Vec::new(),
+        mining: false,
+        signature: Vec::new(),
+        sig_algo: SigAlgo::Signature,
+        vrf: Vec::new(),
+        proof: Vec::new(),
+    };
+    let sig_chain_element_ser = sig_chain_element.serialize_unsigned();
+
+    let mut digest = sha256_hash(&prev_signature).to_vec();
+    digest.extend_from_slice(&sig_chain_element_ser);
+    let digest = sha256_hash(&digest);
+    let signature = ed25519_sign(&private_key, &digest);
+
+    let receipt = Receipt {
+        prev_hash: prev_signature.to_vec(),
+        signature: signature.to_vec(),
+    };
+    let receipt_data = serde_json::to_vec(&receipt).unwrap();
+
+    let client_msg = ClientMessage {
+        message_type: ClientMessageType::Receipt,
+        message: receipt_data,
+        compression_type: CompressionType::CompressionNone,
+    };
+    let client_msg_data = serde_json::to_vec(&client_msg).unwrap();
+
+    write_message(&client_msg_data, stdin_tx, reconnect_tx)
+}
+
 async fn send_messages(
     dests: &[&str],
     payload: MessagePayload,
@@ -439,6 +490,8 @@ async fn send_messages(
     private_key: &[u8],
     address_id: &[u8],
     curve_secret_key: &[u8],
+    stdin_tx: Arc<Mutex<Option<UnboundedSender<WsMessage>>>>,
+    reconnect_tx: Sender<()>,
     node: &Arc<Mutex<Option<Node>>>,
     sig_chain_block_hash: &Arc<Mutex<Option<String>>>,
     shared_keys: &Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
@@ -524,43 +577,14 @@ async fn send_messages(
 
     for outbound_msg in outbound_msgs {
         let client_msg = create_client_message(&outbound_msg)?;
-        write_message(&serde_json::to_vec(&client_msg).unwrap()).await;
+        write_message(
+            &serde_json::to_vec(&client_msg).unwrap(),
+            stdin_tx.clone(),
+            reconnect_tx.clone(),
+        );
     }
 
     Ok(())
-}
-
-async fn send_receipt(prev_signature: &[u8], private_key: &[u8]) -> Result<(), String> {
-    let sig_chain_element = SigChainElement {
-        id: Vec::new(),
-        next_pubkey: Vec::new(),
-        mining: false,
-        signature: Vec::new(),
-        sig_algo: SigAlgo::Signature,
-        vrf: Vec::new(),
-        proof: Vec::new(),
-    };
-    let sig_chain_element_ser = sig_chain_element.serialize_unsigned();
-
-    let mut digest = sha256_hash(&prev_signature).to_vec();
-    digest.extend_from_slice(&sig_chain_element_ser);
-    let digest = sha256_hash(&digest);
-    let signature = ed25519_sign(&private_key, &digest);
-
-    let receipt = Receipt {
-        prev_hash: prev_signature.to_vec(),
-        signature: signature.to_vec(),
-    };
-    let receipt_data = serde_json::to_vec(&receipt).unwrap();
-
-    let client_msg = ClientMessage {
-        message_type: ClientMessageType::Receipt,
-        message: receipt_data,
-        compression_type: CompressionType::CompressionNone,
-    };
-    let client_msg_data = serde_json::to_vec(&client_msg).unwrap();
-
-    write_message(&client_msg_data).await
 }
 
 async fn handle_message(
@@ -573,6 +597,7 @@ async fn handle_message(
     client_node: Arc<Mutex<Option<Node>>>,
     sig_chain_block_hash: Arc<Mutex<Option<String>>>,
     wallet: Arc<Mutex<Wallet>>,
+    stdin_tx: Arc<Mutex<Option<UnboundedSender<WsMessage>>>>,
     connect_tx: Sender<Node>,
     message_tx: Sender<Message>,
     reconnect_tx: Sender<()>,
@@ -659,8 +684,10 @@ async fn handle_message(
 
                 if !inbound_msg.prev_hash.is_empty() {
                     let prev_hash = inbound_msg.prev_hash;
+                    let stdin_tx = stdin_tx.clone();
+                    let reconnect_tx = reconnect_tx.clone();
                     task::spawn(async move {
-                        send_receipt(&prev_hash, &private_key).await.unwrap();
+                        send_receipt(&prev_hash, &private_key, stdin_tx, reconnect_tx).unwrap();
                     });
                 }
 
@@ -738,6 +765,7 @@ async fn connect_to_node(
     client_node: Arc<Mutex<Option<Node>>>,
     sig_chain_block_hash: Arc<Mutex<Option<String>>>,
     wallet: Arc<Mutex<Wallet>>,
+    stdin_tx: Arc<Mutex<Option<UnboundedSender<WsMessage>>>>,
     connect_tx: Sender<Node>,
     message_tx: Sender<Message>,
     reconnect_tx: Sender<()>,
@@ -776,11 +804,12 @@ async fn connect_to_node(
         None
     };
 
-    let (stdin_tx, stdin_rx) = futures_channel::mpsc::unbounded();
-
     let url = Url::parse(&format!("ws://{}", node.addr)).unwrap();
     let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
     let (write, read) = ws_stream.split();
+
+    let (stdin_tx_new, stdin_rx) = unbounded();
+    *stdin_tx.lock().unwrap() = Some(stdin_tx_new);
 
     let stdin_to_ws = stdin_rx.map(Ok).forward(write);
     let ws_to_stdout = {
@@ -841,7 +870,7 @@ async fn connect_to_node(
 
             sleep(Duration::from_secs(PING_INTERVAL)).await;
 
-            let res = stdin_tx_clone.unbounded_send(WsMessage::Ping(Vec::new()));
+            let res = stdin_tx_clone.lock().unwrap().as_ref().unwrap().unbounded_send(WsMessage::Ping(Vec::new()));
 
             if let Err(err) = res {
                 log::error!("Error: {}", err);
@@ -852,6 +881,7 @@ async fn connect_to_node(
     });
 
     let address_clone = address.clone();
+    let stdin_tx_clone = stdin_tx.clone();
     let reconnect_tx_clone = reconnect_tx.clone();
     task::spawn(async move {
         let req_bytes = json!({
@@ -862,7 +892,7 @@ async fn connect_to_node(
         .as_bytes()
         .to_vec();
 
-        let res = stdin_tx.unbounded_send(WsMessage::Binary(req_bytes));
+        let res = stdin_tx_clone.lock().unwrap().as_ref().unwrap().unbounded_send(WsMessage::Binary(req_bytes));
 
         if let Err(err) = res {
             log::error!("Error: {}", err);
@@ -872,6 +902,7 @@ async fn connect_to_node(
     });
 
     let closed_clone = closed.clone();
+    let stdin_tx_clone = stdin_tx.clone();
     task::spawn(async move {
         let mut stdin = tokio::io::stdin();
 
@@ -902,6 +933,7 @@ async fn connect_to_node(
                 client_node.clone(),
                 sig_chain_block_hash.clone(),
                 wallet.clone(),
+                stdin_tx_clone.clone(),
                 connect_tx_clone,
                 message_tx_clone,
                 reconnect_tx_clone,
@@ -937,6 +969,7 @@ async fn connect(
     client_node: Arc<Mutex<Option<Node>>>,
     sig_chain_block_hash: Arc<Mutex<Option<String>>>,
     wallet: Arc<Mutex<Wallet>>,
+    stdin_tx: Arc<Mutex<Option<UnboundedSender<WsMessage>>>>,
     connect_tx: Sender<Node>,
     message_tx: Sender<Message>,
     reconnect_tx: Sender<()>,
@@ -979,6 +1012,7 @@ async fn connect(
                     client_node.clone(),
                     sig_chain_block_hash.clone(),
                     wallet.clone(),
+                    stdin_tx.clone(),
                     connect_tx_clone,
                     message_tx_clone,
                     reconnect_tx_clone,
@@ -1017,6 +1051,7 @@ async fn handle_reconnect(
     client_node: Arc<Mutex<Option<Node>>>,
     sig_chain_block_hash: Arc<Mutex<Option<String>>>,
     wallet: Arc<Mutex<Wallet>>,
+    stdin_tx: Arc<Mutex<Option<UnboundedSender<WsMessage>>>>,
     connect_tx: Sender<Node>,
     message_tx: Sender<Message>,
     reconnect_tx: Sender<()>,
@@ -1049,6 +1084,7 @@ async fn handle_reconnect(
             client_node.clone(),
             sig_chain_block_hash.clone(),
             wallet.clone(),
+            stdin_tx.clone(),
             connect_tx_clone,
             message_tx_clone,
             reconnect_tx_clone,
@@ -1073,6 +1109,8 @@ async fn handle_reply(
     private_key: Vec<u8>,
     address_id: [u8; SHA256_LEN],
     curve_secret_key: [u8; SHARED_KEY_LEN],
+    stdin_tx: Arc<Mutex<Option<UnboundedSender<WsMessage>>>>,
+    reconnect_tx: Sender<()>,
     node: Arc<Mutex<Option<Node>>>,
     sig_chain_block_hash: Arc<Mutex<Option<String>>>,
     shared_keys: Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
@@ -1081,6 +1119,7 @@ async fn handle_reply(
     loop {
         let (src, payload, encrypted) = reply_rx.recv().unwrap();
 
+        let reconnect_tx_clone = reconnect_tx.clone();
         let res = send_messages(
             &[src.as_str()],
             payload,
@@ -1091,6 +1130,8 @@ async fn handle_reply(
             &private_key,
             &address_id,
             &curve_secret_key,
+            stdin_tx.clone(),
+            reconnect_tx_clone,
             &node,
             &sig_chain_block_hash,
             &shared_keys,
@@ -1114,6 +1155,7 @@ pub struct Client {
     closed: Arc<Mutex<bool>>,
     node: Arc<Mutex<Option<Node>>>,
     sig_chain_block_hash: Arc<Mutex<Option<String>>>,
+    stdin_tx: Arc<Mutex<Option<UnboundedSender<WsMessage>>>>,
     connect_channel: Channel<Node>,
     message_channel: Channel<Message>,
     reconnect_tx: Sender<()>,
@@ -1155,6 +1197,7 @@ impl Client {
         let response_channels = Arc::new(Mutex::new(HashMap::new()));
         let shared_keys = Arc::new(Mutex::new(HashMap::new()));
 
+        let stdin_tx = Arc::new(Mutex::new(None));
         let (connect_tx, connect_rx) = channel();
         let (message_tx, message_rx) = channel();
         let (reply_tx, reply_rx) = channel();
@@ -1167,6 +1210,7 @@ impl Client {
         let node_clone = node.clone();
         let sig_chain_block_hash_clone = sig_chain_block_hash.clone();
         let wallet_clone = wallet.clone();
+        let stdin_tx_clone = stdin_tx.clone();
         let connect_tx_clone = connect_tx.clone();
         let message_tx_clone = message_tx.clone();
         let reconnect_tx_clone = reconnect_tx.clone();
@@ -1184,6 +1228,7 @@ impl Client {
                 node_clone,
                 sig_chain_block_hash_clone,
                 wallet_clone,
+                stdin_tx_clone,
                 connect_tx_clone,
                 message_tx_clone,
                 reconnect_tx_clone,
@@ -1202,6 +1247,7 @@ impl Client {
         let node_clone = node.clone();
         let sig_chain_block_hash_clone = sig_chain_block_hash.clone();
         let wallet_clone = wallet.clone();
+        let stdin_tx_clone = stdin_tx.clone();
         let connect_tx_clone = connect_tx.clone();
         let message_tx_clone = message_tx.clone();
         let reconnect_tx_clone = reconnect_tx.clone();
@@ -1219,6 +1265,7 @@ impl Client {
                 node_clone,
                 sig_chain_block_hash_clone,
                 wallet_clone,
+                stdin_tx_clone,
                 connect_tx_clone,
                 message_tx_clone,
                 reconnect_tx_clone,
@@ -1237,6 +1284,8 @@ impl Client {
         let address_id_clone = address_id.clone();
         let curve_secret_key_clone = curve_secret_key.clone();
         let node_clone = node.clone();
+        let stdin_tx_clone = stdin_tx.clone();
+        let reconnect_tx_clone = reconnect_tx.clone();
         let sig_chain_block_hash_clone = sig_chain_block_hash.clone();
         let shared_keys_clone = shared_keys.clone();
         let rpc_config = client_config_to_rpc_config(&config.lock().unwrap());
@@ -1248,6 +1297,8 @@ impl Client {
                 private_key,
                 address_id_clone,
                 curve_secret_key_clone,
+                stdin_tx_clone,
+                reconnect_tx_clone,
                 node_clone,
                 sig_chain_block_hash_clone,
                 shared_keys_clone,
@@ -1266,6 +1317,7 @@ impl Client {
             closed,
             node,
             sig_chain_block_hash,
+            stdin_tx,
             connect_channel: (connect_tx, connect_rx),
             message_channel: (message_tx, message_rx),
             reconnect_tx,
@@ -1322,6 +1374,7 @@ impl Client {
             self.node.clone(),
             self.sig_chain_block_hash.clone(),
             self.wallet.clone(),
+            self.stdin_tx.clone(),
             connect_tx.clone(),
             message_tx.clone(),
             self.reconnect_tx.clone(),
@@ -1365,6 +1418,8 @@ impl Client {
             self.private_key(),
             &self.address_id,
             &self.curve_secret_key,
+            self.stdin_tx.clone(),
+            self.reconnect_tx.clone(),
             &self.node,
             &self.sig_chain_block_hash,
             &self.shared_keys,
