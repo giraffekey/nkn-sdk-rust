@@ -1,4 +1,5 @@
 pub mod client;
+pub mod error;
 pub mod message;
 pub mod multiclient;
 pub mod nano_pay;

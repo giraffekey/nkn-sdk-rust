@@ -14,7 +14,7 @@ use std::{
 };
 use tokio::task;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RPCConfig {
     pub rpc_server_address: Vec<String>,
     pub rpc_timeout: Duration,

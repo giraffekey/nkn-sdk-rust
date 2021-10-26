@@ -7,7 +7,10 @@ use crate::crypto::{
     ed25519_public_key_to_curve25519_public_key, ed25519_sign, sha256_hash, IV_LEN, PUBLIC_KEY_LEN,
     SEED_LEN, SHA256_LEN, SHARED_KEY_LEN, SIGNATURE_LEN,
 };
-use crate::message::{Message, MessageConfig, MessagePayload, PayloadMessage};
+use crate::error::NKNError;
+use crate::message::{
+    Message, MessageConfig, MessagePayload, MessagePayloadType, PayloadMessage, Reply, TextData,
+};
 use crate::nano_pay::{NanoPay, NanoPayClaimer};
 use crate::program::{create_program_hash, to_script_hash};
 use crate::rpc::{
@@ -24,7 +27,7 @@ use flate2::{write::ZlibEncoder, Compression};
 use futures_util::{future, pin_mut, StreamExt};
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value as JsonValue};
 use std::collections::HashMap;
 use std::io::Write;
 use std::str;
@@ -87,14 +90,10 @@ struct Receipt {
     signature: Vec<u8>,
 }
 
-fn parse_client_address(address_str: &str) -> Result<([u8; SHA256_LEN], Vec<u8>, String), String> {
-    let client_id = sha256_hash(address_str.as_bytes());
-    let substrings: Vec<&str> = address_str.split(".").collect();
-    let public_key_str = substrings.last().unwrap();
-    let public_key = hex::decode(public_key_str)
-        .map_err(|_| "Invalid public key string converting to hex".to_string())?;
-    let identifier = substrings[..substrings.len() - 1].join(".");
-    Ok((client_id, public_key, identifier))
+#[derive(Debug, Deserialize)]
+struct ClientResult {
+    node: Node,
+    sig_chain_block_hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -135,24 +134,568 @@ impl Default for ClientConfig {
     }
 }
 
-fn close(closed: &Arc<Mutex<bool>>) {
-    *closed.lock().unwrap() = true;
-    todo!(); // close connection
+type Channel<T> = (Sender<T>, Receiver<T>);
+
+fn parse_client_address(address_str: &str) -> Result<([u8; SHA256_LEN], Vec<u8>, String), String> {
+    let client_id = sha256_hash(address_str.as_bytes());
+    let substrings: Vec<&str> = address_str.split(".").collect();
+    let public_key_str = substrings.last().unwrap();
+    let public_key = hex::decode(public_key_str)
+        .map_err(|_| "Invalid public key string converting to hex".to_string())?;
+    let identifier = substrings[..substrings.len() - 1].join(".");
+    Ok((client_id, public_key, identifier))
+}
+
+fn get_or_compute_shared_key(
+    remote_public_key: &[u8],
+    curve_secret_key: &[u8],
+    shared_keys: &Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
+) -> Result<[u8; SHARED_KEY_LEN], String> {
+    let remote_public_key_str = str::from_utf8(remote_public_key).unwrap();
+    let shared_keys_lock = shared_keys.lock().unwrap();
+
+    if let Some(shared_key) = shared_keys_lock.get(remote_public_key_str) {
+        Ok(*shared_key)
+    } else {
+        drop(shared_keys_lock);
+
+        if remote_public_key.len() != PUBLIC_KEY_LEN {
+            return Err("invalid public key size".into());
+        }
+
+        let curve_public_key = ed25519_public_key_to_curve25519_public_key(&remote_public_key);
+        let shared_key = ed25519_exchange(&curve_public_key, curve_secret_key);
+
+        shared_keys
+            .lock()
+            .unwrap()
+            .insert(remote_public_key_str.into(), shared_key);
+
+        Ok(shared_key)
+    }
+}
+
+fn encrypt_payload(
+    payload: MessagePayload,
+    dests: &[String],
+    curve_secret_key: &[u8],
+    shared_keys: &Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
+) -> Result<Vec<Vec<u8>>, String> {
+    let raw_payload = serde_json::to_vec(&payload).unwrap();
+    let mut rng = thread_rng();
+
+    if dests.len() > 1 {
+        let mut key = [0u8; SHARED_KEY_LEN];
+        rng.fill(&mut key);
+
+        let mut msg_nonce = [0u8; IV_LEN];
+        rng.fill(&mut msg_nonce);
+
+        let encrypted_payload = aes_encrypt(&raw_payload, &key, &msg_nonce);
+
+        let mut msgs = Vec::new();
+
+        for dest in dests {
+            let (_, dest_pubkey, _) = parse_client_address(dest)?;
+            let shared_key =
+                get_or_compute_shared_key(&dest_pubkey, curve_secret_key, shared_keys)?;
+
+            let mut key_nonce = [0u8; IV_LEN];
+            rng.fill(&mut key_nonce);
+
+            let encrypted_key = aes_encrypt(&key, &shared_key, &key_nonce);
+            let nonce = [key_nonce, msg_nonce].concat();
+
+            msgs.push(
+                serde_json::to_vec(&PayloadMessage {
+                    payload: encrypted_payload.clone(),
+                    encrypted: true,
+                    nonce,
+                    encrypted_key,
+                })
+                .unwrap(),
+            );
+        }
+
+        Ok(msgs)
+    } else {
+        let (_, dest_pubkey, _) = parse_client_address(&dests[0])?;
+        let shared_key = get_or_compute_shared_key(&dest_pubkey, curve_secret_key, shared_keys)?;
+
+        let mut nonce = [0u8; IV_LEN];
+        rng.fill(&mut nonce);
+
+        let encrypted_payload = aes_encrypt(&raw_payload, &shared_key, &nonce);
+
+        Ok(vec![serde_json::to_vec(&PayloadMessage {
+            payload: encrypted_payload,
+            encrypted: true,
+            nonce: nonce.to_vec(),
+            encrypted_key: Vec::new(),
+        })
+        .unwrap()])
+    }
+}
+
+fn decrypt_payload(
+    msg: PayloadMessage,
+    src_address: &str,
+    curve_secret_key: &[u8],
+    shared_keys: &Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
+) -> Result<Vec<u8>, String> {
+    let encrypted_payload = msg.payload;
+    let (_, src_pubkey, _) = parse_client_address(src_address)?;
+
+    if !msg.encrypted_key.is_empty() {
+        let shared_key = get_or_compute_shared_key(&src_pubkey, curve_secret_key, shared_keys)?;
+        let key = aes_decrypt(&msg.encrypted_key, &shared_key, &msg.nonce[..IV_LEN]);
+        let payload = aes_decrypt(&encrypted_payload, &key, &msg.nonce[IV_LEN..]);
+        Ok(payload)
+    } else {
+        let shared_key = get_or_compute_shared_key(&src_pubkey, curve_secret_key, shared_keys)?;
+        let payload = aes_decrypt(&encrypted_payload, &shared_key, &msg.nonce);
+        Ok(payload)
+    }
+}
+
+async fn write_message(data: &[u8]) -> Result<(), String> {
+    todo!()
+}
+
+async fn process_dests(dests: &[&str], rpc_config: RPCConfig) -> Result<Vec<String>, String> {
+    if dests.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut processed_dests = Vec::new();
+
+    for dest in dests {
+        let mut address: Vec<String> = dest.split('.').map(|s| s.to_string()).collect();
+
+        if address.last().unwrap().len() < 2 * PUBLIC_KEY_LEN {
+            let res = get_registrant(address.last().unwrap(), rpc_config.clone()).await;
+
+            let reg = match res {
+                Ok(reg) => reg,
+                Err(_) => continue,
+            };
+
+            if reg.registrant.is_empty() {
+                continue;
+            }
+
+            *address.last_mut().unwrap() = reg.registrant;
+        }
+
+        let processed_dest = address.join(".");
+
+        processed_dests.push(processed_dest);
+    }
+
+    if processed_dests.is_empty() {
+        Err("invalid destination".into())
+    } else {
+        Ok(processed_dests)
+    }
+}
+
+fn create_payloads(
+    dests: &[String],
+    payload: MessagePayload,
+    encrypted: bool,
+    curve_secret_key: &[u8],
+    shared_keys: &Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
+) -> Result<Vec<Vec<u8>>, String> {
+    if encrypted {
+        Ok(encrypt_payload(
+            payload,
+            dests,
+            curve_secret_key,
+            shared_keys,
+        )?)
+    } else {
+        let payload = serde_json::to_vec(&payload).unwrap();
+        let payload = serde_json::to_vec(&PayloadMessage {
+            payload,
+            encrypted: false,
+            nonce: Vec::new(),
+            encrypted_key: Vec::new(),
+        })
+        .unwrap();
+        Ok(vec![payload])
+    }
+}
+
+fn create_outbound_message(
+    dests: &[&str],
+    payloads: &[&[u8]],
+    encrypted: bool,
+    max_holding_seconds: u32,
+    public_key: &[u8],
+    private_key: &[u8],
+    address_id: &[u8],
+    node: &Arc<Mutex<Option<Node>>>,
+    sig_chain_block_hash: &Arc<Mutex<Option<String>>>,
+) -> Result<OutboundMessage, String> {
+    let mut outbound_msg = OutboundMessage {
+        dest: String::new(),
+        dests: dests.iter().map(|s| s.to_string()).collect(),
+        payload: Vec::new(),
+        max_holding_seconds,
+        nonce: 0,
+        block_hash: Vec::new(),
+        signatures: Vec::new(),
+        payloads: payloads.iter().map(|v| v.to_vec()).collect(),
+    };
+
+    let node_public_key = hex::decode(&node.lock().unwrap().as_ref().unwrap().pub_key).unwrap();
+    let sig_chain_element = SigChainElement {
+        id: Vec::new(),
+        next_pubkey: node_public_key,
+        mining: false,
+        signature: Vec::new(),
+        sig_algo: SigAlgo::Signature,
+        vrf: Vec::new(),
+        proof: Vec::new(),
+    };
+    let sig_chain_element_ser = sig_chain_element.serialize_unsigned();
+
+    let mut rng = thread_rng();
+    let nonce = rng.gen();
+
+    let mut sig_chain = SigChain {
+        nonce,
+        data_size: 0,
+        block_hash: Vec::new(),
+        src_id: address_id.to_vec(),
+        src_pubkey: public_key.to_vec(),
+        dest_id: Vec::new(),
+        dest_pubkey: Vec::new(),
+        elems: vec![sig_chain_element],
+    };
+
+    if let Some(sig_chain_block_hash) = &*sig_chain_block_hash.lock().unwrap() {
+        let sig_chain_block_hash = hex::decode(sig_chain_block_hash).unwrap();
+        sig_chain.block_hash = sig_chain_block_hash.clone();
+        outbound_msg.block_hash = sig_chain_block_hash.clone();
+    }
+
+    let mut signatures = Vec::new();
+
+    for (i, dest) in dests.iter().enumerate() {
+        let (dest_id, dest_public_key, _) = parse_client_address(dest)?;
+        sig_chain.dest_id = dest_id.to_vec();
+        sig_chain.dest_pubkey = dest_public_key;
+
+        if payloads.len() > 1 {
+            sig_chain.data_size = payloads[i].len() as u32;
+        } else {
+            sig_chain.data_size = payloads[0].len() as u32;
+        }
+
+        let metadata = sig_chain.serialize_metadata();
+        let mut digest = sha256_hash(&metadata).to_vec();
+        digest.extend_from_slice(&sig_chain_element_ser);
+        let digest = sha256_hash(&digest);
+
+        let signature = ed25519_sign(private_key, &digest);
+        signatures.push(signature.to_vec());
+    }
+
+    outbound_msg.signatures = signatures;
+    outbound_msg.nonce = nonce;
+    Ok(outbound_msg)
+}
+
+fn create_client_message(outbound_msg: &OutboundMessage) -> Result<ClientMessage, String> {
+    let outbound_msg_data = serde_json::to_vec(outbound_msg).unwrap();
+
+    if outbound_msg.payloads.len() > 1 {
+        let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
+        e.write_all(&outbound_msg_data);
+        let message = e.finish().unwrap();
+
+        Ok(ClientMessage {
+            message_type: ClientMessageType::OutboundMessage,
+            compression_type: CompressionType::CompressionZlib,
+            message,
+        })
+    } else {
+        Ok(ClientMessage {
+            message_type: ClientMessageType::OutboundMessage,
+            compression_type: CompressionType::CompressionNone,
+            message: outbound_msg_data,
+        })
+    }
+}
+
+async fn send_messages(
+    dests: &[&str],
+    payload: MessagePayload,
+    encrypted: bool,
+    max_holding_seconds: u32,
+    ws_write_timeout: u64,
+    public_key: &[u8],
+    private_key: &[u8],
+    address_id: &[u8],
+    curve_secret_key: &[u8],
+    node: &Arc<Mutex<Option<Node>>>,
+    sig_chain_block_hash: &Arc<Mutex<Option<String>>>,
+    shared_keys: &Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
+    rpc_config: RPCConfig,
+) -> Result<(), String> {
+    let dests = process_dests(dests, rpc_config).await?;
+
+    if dests.is_empty() {
+        return Ok(());
+    }
+
+    let payloads = create_payloads(&dests, payload, encrypted, curve_secret_key, shared_keys)?;
+
+    let mut outbound_msgs = Vec::new();
+    let mut dest_list = Vec::new();
+    let mut payload_list = Vec::new();
+
+    if payloads.len() > 1 {
+        let mut total_size = 0;
+
+        for i in 0..payloads.len() {
+            let size = payloads[i].len() + dests[i].len() + SIGNATURE_LEN;
+
+            if size > MAX_CLIENT_MESSAGE_SIZE {
+                return Err("message oversize".into());
+            }
+
+            if total_size + size > MAX_CLIENT_MESSAGE_SIZE {
+                outbound_msgs.push(create_outbound_message(
+                    &dest_list,
+                    &payload_list,
+                    encrypted,
+                    max_holding_seconds,
+                    public_key,
+                    private_key,
+                    address_id,
+                    node,
+                    sig_chain_block_hash,
+                )?);
+                dest_list.clear();
+                payload_list.clear();
+                total_size = 0;
+            }
+
+            dest_list.push(&dests[i]);
+            payload_list.push(&payloads[i]);
+            total_size += size;
+        }
+    } else {
+        let mut size = payloads[0].len();
+
+        for dest in &dests {
+            size += dest.len() + SIGNATURE_LEN;
+        }
+
+        if size > MAX_CLIENT_MESSAGE_SIZE {
+            return Err("message oversize".into());
+        }
+
+        dest_list = dests.iter().map(|s| s.as_str()).collect();
+        payload_list = payloads.iter().map(|p| p.as_slice()).collect();
+    }
+
+    outbound_msgs.push(create_outbound_message(
+        &dest_list,
+        &payload_list,
+        encrypted,
+        max_holding_seconds,
+        public_key,
+        private_key,
+        address_id,
+        node,
+        sig_chain_block_hash,
+    )?);
+
+    if outbound_msgs.len() > 1 {
+        log::info!(
+            "Client message size is greater than {} bytes, split into {} batches.",
+            MAX_CLIENT_MESSAGE_SIZE,
+            outbound_msgs.len()
+        );
+    }
+
+    for outbound_msg in outbound_msgs {
+        let client_msg = create_client_message(&outbound_msg)?;
+        write_message(&serde_json::to_vec(&client_msg).unwrap()).await;
+    }
+
+    Ok(())
+}
+
+async fn send_receipt(prev_signature: &[u8]) -> Result<(), String> {
+    todo!()
 }
 
 async fn handle_message(
     is_text: bool,
     data: Vec<u8>,
+    address: String,
+    config: Arc<Mutex<ClientConfig>>,
     closed: Arc<Mutex<bool>>,
+    client_node: Arc<Mutex<Option<Node>>>,
+    sig_chain_block_hash: Arc<Mutex<Option<String>>>,
+    wallet: Arc<Mutex<Wallet>>,
+    connect_tx: Sender<Node>,
+    message_tx: Sender<Message>,
+    reconnect_tx: Sender<()>,
+    reply_tx: Sender<Reply>,
+    response_channels: Arc<Mutex<HashMap<String, Channel<Message>>>>,
+    curve_secret_key: [u8; SHARED_KEY_LEN],
+    shared_keys: Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
 ) -> Result<(), String> {
     if *closed.lock().unwrap() {
         return Ok(());
     }
 
     if is_text {
-        todo!()
+        let msg: JsonValue = serde_json::from_slice(&data).unwrap();
+        let action = msg["Action"].as_str().unwrap();
+        let error: NKNError = NKNError::from(msg["Error"].as_i64().unwrap());
+
+        if error != NKNError::Success {
+            if error == NKNError::WrongNode {
+                // let node: Node = serde_json::from_value(msg["Result"].clone()).unwrap();
+                // let address = address.clone();
+                // let config_clone = config.clone();
+                // let closed_clone = closed.clone();
+                // let client_node_clone = client_node.clone();
+                // let sig_chain_block_hash_clone = sig_chain_block_hash.clone();
+                // let wallet_clone = wallet.clone();
+                // let connect_tx_clone = connect_tx.clone();
+                // let message_tx_clone = message_tx.clone();
+                // let reconnect_tx_clone = reconnect_tx.clone();
+                // let response_channels_clone = response_channels.clone();
+                // task::spawn(async move {
+                //     let res = connect_to_node(
+                //         node,
+                //         address,
+                //         config_clone,
+                //         closed_clone,
+                //         client_node_clone,
+                //         sig_chain_block_hash_clone,
+                //         wallet_clone,
+                //         connect_tx_clone,
+                //         message_tx_clone,
+                //         reconnect_tx_clone,
+                //         response_channels_clone,
+                //     )
+                //     .await;
+
+                //     if res.is_err() {
+                //         reconnect_tx_clone.send(()).unwrap();
+                //     }
+                // });
+            } else if action == "setClient" {
+                close(closed.clone());
+            }
+
+            return Err("Error".into());
+        }
+
+        match action {
+            "setClient" => {
+                let result: ClientResult = serde_json::from_value(msg["Result"].clone()).unwrap();
+                *sig_chain_block_hash.lock().unwrap() = Some(result.sig_chain_block_hash);
+
+                if *closed.lock().unwrap() {
+                    return Ok(());
+                }
+
+                let node = client_node.lock().unwrap().clone().unwrap();
+                connect_tx.send(node).unwrap();
+            }
+            "updateSigChainBlockHash" => {
+                *sig_chain_block_hash.lock().unwrap() =
+                    Some(msg["Result"].as_str().unwrap().to_string());
+            }
+            _ => (),
+        }
+
+        Ok(())
     } else {
-        todo!()
+        let client_msg: ClientMessage = serde_json::from_slice(&data).unwrap();
+        match client_msg.message_type {
+            ClientMessageType::InboundMessage => {
+                let inbound_msg: InboundMessage =
+                    serde_json::from_slice(&client_msg.message).unwrap();
+
+                if !inbound_msg.prev_hash.is_empty() {
+                    let prev_hash = inbound_msg.prev_hash;
+                    task::spawn(async move {
+                        send_receipt(&prev_hash).await.unwrap();
+                    });
+                }
+
+                let payload_msg: PayloadMessage =
+                    serde_json::from_slice(&inbound_msg.payload).unwrap();
+                let encrypted = payload_msg.encrypted;
+
+                let payload_bytes = if encrypted {
+                    decrypt_payload(
+                        payload_msg,
+                        &inbound_msg.src,
+                        &curve_secret_key,
+                        &shared_keys,
+                    )?
+                } else {
+                    payload_msg.payload
+                };
+
+                let payload: MessagePayload = serde_json::from_slice(&payload_bytes).unwrap();
+
+                let data = match payload.r#type {
+                    MessagePayloadType::Text => {
+                        let text_data: TextData = serde_json::from_slice(&payload.data).unwrap();
+                        text_data.text.as_bytes().to_vec()
+                    }
+                    MessagePayloadType::Ack => Vec::new(),
+                    _ => unreachable!(),
+                };
+
+                let msg = Message {
+                    src: inbound_msg.src,
+                    data,
+                    r#type: payload.r#type as u32,
+                    encrypted,
+                    message_id: payload.message_id,
+                    no_reply: payload.no_reply,
+                    reply_tx: reply_tx.clone(),
+                };
+
+                if !payload.reply_to_id.is_empty() {
+                    let mut response_channels = response_channels.lock().unwrap();
+                    let msg_id_str = str::from_utf8(&payload.reply_to_id).unwrap().to_string();
+                    let channel = response_channels.get(&msg_id_str);
+
+                    match channel {
+                        Some((response_tx, _)) => {
+                            response_tx.send(msg).unwrap();
+                            response_channels.remove(&msg_id_str);
+                        }
+                        None => (),
+                    }
+
+                    return Ok(());
+                }
+
+                if *closed.lock().unwrap() {
+                    return Ok(());
+                }
+
+                message_tx.send(msg).unwrap();
+
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 }
 
@@ -162,8 +705,15 @@ async fn connect_to_node(
     config: Arc<Mutex<ClientConfig>>,
     closed: Arc<Mutex<bool>>,
     client_node: Arc<Mutex<Option<Node>>>,
+    sig_chain_block_hash: Arc<Mutex<Option<String>>>,
     wallet: Arc<Mutex<Wallet>>,
+    connect_tx: Sender<Node>,
+    message_tx: Sender<Message>,
     reconnect_tx: Sender<()>,
+    reply_tx: Sender<Reply>,
+    response_channels: Arc<Mutex<HashMap<String, Channel<Message>>>>,
+    curve_secret_key: [u8; SHARED_KEY_LEN],
+    shared_keys: Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
 ) -> Result<(), String> {
     let handle = if !node.rpc_addr.is_empty() {
         let node = node.clone();
@@ -270,11 +820,12 @@ async fn connect_to_node(
         }
     });
 
+    let address_clone = address.clone();
     let reconnect_tx_clone = reconnect_tx.clone();
     task::spawn(async move {
         let req_bytes = json!({
             "Action": "setClient",
-            "Addr": address,
+            "Addr": address_clone,
         })
         .to_string()
         .as_bytes()
@@ -306,7 +857,28 @@ async fn connect_to_node(
             data.truncate(n);
 
             let is_text = data.pop().unwrap() == 0;
-            let res = handle_message(is_text, data, closed.clone()).await;
+            let connect_tx_clone = connect_tx.clone();
+            let message_tx_clone = message_tx.clone();
+            let reply_tx_clone = reply_tx.clone();
+            let reconnect_tx_clone = reconnect_tx.clone();
+            let res = handle_message(
+                is_text,
+                data,
+                address.clone(),
+                config.clone(),
+                closed.clone(),
+                client_node.clone(),
+                sig_chain_block_hash.clone(),
+                wallet.clone(),
+                connect_tx_clone,
+                message_tx_clone,
+                reconnect_tx_clone,
+                reply_tx_clone,
+                response_channels.clone(),
+                curve_secret_key.clone(),
+                shared_keys.clone(),
+            )
+            .await;
 
             if let Err(err) = res {
                 log::error!("Error: {}", err);
@@ -330,8 +902,15 @@ async fn connect(
     config: Arc<Mutex<ClientConfig>>,
     closed: Arc<Mutex<bool>>,
     client_node: Arc<Mutex<Option<Node>>>,
+    sig_chain_block_hash: Arc<Mutex<Option<String>>>,
     wallet: Arc<Mutex<Wallet>>,
+    connect_tx: Sender<Node>,
+    message_tx: Sender<Message>,
     reconnect_tx: Sender<()>,
+    reply_tx: Sender<Reply>,
+    response_channels: Arc<Mutex<HashMap<String, Channel<Message>>>>,
+    curve_secret_key: [u8; SHARED_KEY_LEN],
+    shared_keys: Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
 ) -> Result<(), String> {
     let max_reconnect_interval = config.lock().unwrap().max_reconnect_interval;
 
@@ -350,14 +929,13 @@ async fn connect(
         }
 
         let rpc_config = client_config_to_rpc_config(&config.lock().unwrap());
-        let res = get_ws_address(
-            &address,
-            rpc_config,
-        )
-        .await;
+        let res = get_ws_address(&address, rpc_config).await;
 
         match res {
             Ok(node) => {
+                let connect_tx_clone = connect_tx.clone();
+                let message_tx_clone = message_tx.clone();
+                let reply_tx_clone = reply_tx.clone();
                 let reconnect_tx_clone = reconnect_tx.clone();
                 let res = connect_to_node(
                     node,
@@ -365,8 +943,15 @@ async fn connect(
                     config.clone(),
                     closed.clone(),
                     client_node.clone(),
+                    sig_chain_block_hash.clone(),
                     wallet.clone(),
+                    connect_tx_clone,
+                    message_tx_clone,
                     reconnect_tx_clone,
+                    reply_tx_clone,
+                    response_channels.clone(),
+                    curve_secret_key.clone(),
+                    shared_keys.clone(),
                 )
                 .await;
 
@@ -384,14 +969,26 @@ async fn connect(
     Err("connect failed".into())
 }
 
+fn close(closed: Arc<Mutex<bool>>) {
+    *closed.lock().unwrap() = true;
+    todo!(); // close connection
+}
+
 async fn handle_reconnect(
     reconnect_rx: Receiver<()>,
     address: String,
     config: Arc<Mutex<ClientConfig>>,
     closed: Arc<Mutex<bool>>,
     client_node: Arc<Mutex<Option<Node>>>,
+    sig_chain_block_hash: Arc<Mutex<Option<String>>>,
     wallet: Arc<Mutex<Wallet>>,
+    connect_tx: Sender<Node>,
+    message_tx: Sender<Message>,
     reconnect_tx: Sender<()>,
+    reply_tx: Sender<Reply>,
+    response_channels: Arc<Mutex<HashMap<String, Channel<Message>>>>,
+    curve_secret_key: [u8; SHARED_KEY_LEN],
+    shared_keys: Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
 ) {
     loop {
         reconnect_rx.recv().unwrap();
@@ -404,6 +1001,9 @@ async fn handle_reconnect(
         log::info!("Reconnect in {} ms...", min_reconnect_interval);
         sleep(Duration::from_millis(min_reconnect_interval)).await;
 
+        let connect_tx_clone = connect_tx.clone();
+        let message_tx_clone = message_tx.clone();
+        let reply_tx_clone = reply_tx.clone();
         let reconnect_tx_clone = reconnect_tx.clone();
         let res = connect(
             0,
@@ -411,14 +1011,59 @@ async fn handle_reconnect(
             config.clone(),
             closed.clone(),
             client_node.clone(),
+            sig_chain_block_hash.clone(),
             wallet.clone(),
+            connect_tx_clone,
+            message_tx_clone,
             reconnect_tx_clone,
+            reply_tx_clone,
+            response_channels.clone(),
+            curve_secret_key.clone(),
+            shared_keys.clone(),
         )
         .await;
 
         if let Err(err) = res {
             log::error!("Error: {}", err);
-            close(&closed);
+            close(closed.clone());
+        }
+    }
+}
+
+async fn handle_reply(
+    reply_rx: Receiver<Reply>,
+    ws_write_timeout: u64,
+    public_key: Vec<u8>,
+    private_key: Vec<u8>,
+    address_id: [u8; SHA256_LEN],
+    curve_secret_key: [u8; SHARED_KEY_LEN],
+    node: Arc<Mutex<Option<Node>>>,
+    sig_chain_block_hash: Arc<Mutex<Option<String>>>,
+    shared_keys: Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
+    rpc_config: RPCConfig,
+) {
+    loop {
+        let (src, payload, encrypted) = reply_rx.recv().unwrap();
+
+        let res = send_messages(
+            &[src.as_str()],
+            payload,
+            encrypted,
+            0,
+            ws_write_timeout,
+            &public_key,
+            &private_key,
+            &address_id,
+            &curve_secret_key,
+            &node,
+            &sig_chain_block_hash,
+            &shared_keys,
+            rpc_config.clone(),
+        )
+        .await;
+
+        if let Err(err) = res {
+            log::error!("Error: {}", err);
         }
     }
 }
@@ -432,11 +1077,12 @@ pub struct Client {
     curve_secret_key: [u8; SHARED_KEY_LEN],
     closed: Arc<Mutex<bool>>,
     node: Arc<Mutex<Option<Node>>>,
-    sig_chain_block_hash: Option<String>,
-    connect_channel: (Sender<Node>, Receiver<Node>),
-    message_channel: (Sender<Message>, Receiver<Message>),
+    sig_chain_block_hash: Arc<Mutex<Option<String>>>,
+    connect_channel: Channel<Node>,
+    message_channel: Channel<Message>,
     reconnect_tx: Sender<()>,
-    response_channels: HashMap<String, (Sender<Message>, Receiver<Message>)>,
+    reply_tx: Sender<Reply>,
+    response_channels: Arc<Mutex<HashMap<String, Channel<Message>>>>,
     shared_keys: Arc<Mutex<HashMap<String, [u8; SHARED_KEY_LEN]>>>,
 }
 
@@ -468,17 +1114,29 @@ impl Client {
         let config = Arc::new(Mutex::new(config));
         let closed = Arc::new(Mutex::new(false));
         let node = Arc::new(Mutex::new(None));
+        let sig_chain_block_hash = Arc::new(Mutex::new(None));
         let wallet = Arc::new(Mutex::new(wallet));
+        let response_channels = Arc::new(Mutex::new(HashMap::new()));
         let shared_keys = Arc::new(Mutex::new(HashMap::new()));
 
+        let (connect_tx, connect_rx) = channel();
+        let (message_tx, message_rx) = channel();
+        let (reply_tx, reply_rx) = channel();
         let (reconnect_tx, reconnect_rx) = channel();
 
         let address_clone = address.clone();
         let config_clone = config.clone();
         let closed_clone = closed.clone();
         let node_clone = node.clone();
+        let sig_chain_block_hash_clone = sig_chain_block_hash.clone();
         let wallet_clone = wallet.clone();
+        let connect_tx_clone = connect_tx.clone();
+        let message_tx_clone = message_tx.clone();
         let reconnect_tx_clone = reconnect_tx.clone();
+        let reply_tx_clone = reply_tx.clone();
+        let response_channels_clone = response_channels.clone();
+        let curve_secret_key_clone = curve_secret_key.clone();
+        let shared_keys_clone = shared_keys.clone();
         task::spawn(async move {
             handle_reconnect(
                 reconnect_rx,
@@ -486,8 +1144,15 @@ impl Client {
                 config_clone,
                 closed_clone,
                 node_clone,
+                sig_chain_block_hash_clone,
                 wallet_clone,
+                connect_tx_clone,
+                message_tx_clone,
                 reconnect_tx_clone,
+                reply_tx_clone,
+                response_channels_clone,
+                curve_secret_key_clone,
+                shared_keys_clone,
             )
             .await;
         });
@@ -496,8 +1161,15 @@ impl Client {
         let config_clone = config.clone();
         let closed_clone = closed.clone();
         let node_clone = node.clone();
+        let sig_chain_block_hash_clone = sig_chain_block_hash.clone();
         let wallet_clone = wallet.clone();
+        let connect_tx_clone = connect_tx.clone();
+        let message_tx_clone = message_tx.clone();
         let reconnect_tx_clone = reconnect_tx.clone();
+        let reply_tx_clone = reply_tx.clone();
+        let response_channels_clone = response_channels.clone();
+        let curve_secret_key_clone = curve_secret_key.clone();
+        let shared_keys_clone = shared_keys.clone();
         task::spawn(async move {
             connect(
                 0,
@@ -505,11 +1177,43 @@ impl Client {
                 config_clone,
                 closed_clone,
                 node_clone,
+                sig_chain_block_hash_clone,
                 wallet_clone,
+                connect_tx_clone,
+                message_tx_clone,
                 reconnect_tx_clone,
+                reply_tx_clone,
+                response_channels_clone,
+                curve_secret_key_clone,
+                shared_keys_clone,
             )
             .await
             .unwrap();
+        });
+
+        let ws_write_timeout = config.lock().unwrap().ws_write_timeout;
+        let public_key = account.public_key().to_vec();
+        let private_key = account.private_key().to_vec();
+        let address_id_clone = address_id.clone();
+        let curve_secret_key_clone = curve_secret_key.clone();
+        let node_clone = node.clone();
+        let sig_chain_block_hash_clone = sig_chain_block_hash.clone();
+        let shared_keys_clone = shared_keys.clone();
+        let rpc_config = client_config_to_rpc_config(&config.lock().unwrap());
+        task::spawn(async move {
+            handle_reply(
+                reply_rx,
+                ws_write_timeout,
+                public_key,
+                private_key,
+                address_id_clone,
+                curve_secret_key_clone,
+                node_clone,
+                sig_chain_block_hash_clone,
+                shared_keys_clone,
+                rpc_config,
+            )
+            .await;
         });
 
         Ok(Self {
@@ -521,11 +1225,12 @@ impl Client {
             wallet,
             closed,
             node,
-            sig_chain_block_hash: None,
-            connect_channel: channel(),
-            message_channel: channel(),
+            sig_chain_block_hash,
+            connect_channel: (connect_tx, connect_rx),
+            message_channel: (message_tx, message_rx),
             reconnect_tx,
-            response_channels: HashMap::new(),
+            reply_tx,
+            response_channels,
             shared_keys,
         })
     }
@@ -551,11 +1256,7 @@ impl Client {
     }
 
     pub fn close(&mut self) {
-        close(&self.closed);
-    }
-
-    pub fn connection(&self) {
-        todo!() // return WS connection
+        close(self.closed.clone());
     }
 
     pub fn wait_for_connect(&self) -> Result<Node, String> {
@@ -569,14 +1270,24 @@ impl Client {
     }
 
     async fn connect(&self, max_retries: u32) -> Result<(), String> {
+        let (connect_tx, _) = &self.connect_channel;
+        let (message_tx, _) = &self.message_channel;
+
         connect(
             max_retries,
             self.address.clone(),
             self.config.clone(),
             self.closed.clone(),
             self.node.clone(),
+            self.sig_chain_block_hash.clone(),
             self.wallet.clone(),
+            connect_tx.clone(),
+            message_tx.clone(),
             self.reconnect_tx.clone(),
+            self.reply_tx.clone(),
+            self.response_channels.clone(),
+            self.curve_secret_key.clone(),
+            self.shared_keys.clone(),
         )
         .await
     }
@@ -595,274 +1306,6 @@ impl Client {
         self.node.lock().unwrap().clone()
     }
 
-    fn get_or_compute_shared_key(
-        &self,
-        remote_public_key: &[u8],
-    ) -> Result<[u8; SHARED_KEY_LEN], String> {
-        let remote_public_key_str = str::from_utf8(remote_public_key).unwrap();
-        let shared_keys = self.shared_keys.lock().unwrap();
-
-        if let Some(shared_key) = shared_keys.get(remote_public_key_str) {
-            Ok(*shared_key)
-        } else {
-            drop(shared_keys);
-
-            if remote_public_key.len() != PUBLIC_KEY_LEN {
-                return Err("invalid public key size".into());
-            }
-
-            let curve_public_key = ed25519_public_key_to_curve25519_public_key(&remote_public_key);
-            let shared_key = ed25519_exchange(&curve_public_key, &self.curve_secret_key);
-
-            self.shared_keys
-                .lock()
-                .unwrap()
-                .insert(remote_public_key_str.into(), shared_key);
-
-            Ok(shared_key)
-        }
-    }
-
-    fn encrypt_payload(
-        &self,
-        payload: MessagePayload,
-        dests: &[String],
-    ) -> Result<Vec<Vec<u8>>, String> {
-        let raw_payload = serde_json::to_vec(&payload).unwrap();
-        let mut rng = thread_rng();
-
-        if dests.len() > 1 {
-            let mut key = [0u8; SHARED_KEY_LEN];
-            rng.fill(&mut key);
-
-            let mut msg_nonce = [0u8; IV_LEN];
-            rng.fill(&mut msg_nonce);
-
-            let encrypted_payload = aes_encrypt(&raw_payload, &key, &msg_nonce);
-
-            let mut msgs = Vec::new();
-
-            for dest in dests {
-                let (_, dest_pubkey, _) = parse_client_address(dest)?;
-                let shared_key = self.get_or_compute_shared_key(&dest_pubkey)?;
-
-                let mut key_nonce = [0u8; IV_LEN];
-                rng.fill(&mut key_nonce);
-
-                let encrypted_key = aes_encrypt(&key, &shared_key, &key_nonce);
-                let nonce = [key_nonce, msg_nonce].concat();
-
-                msgs.push(
-                    serde_json::to_vec(&PayloadMessage {
-                        payload: encrypted_payload.clone(),
-                        encrypted: true,
-                        nonce,
-                        encrypted_key,
-                    })
-                    .unwrap(),
-                );
-            }
-
-            Ok(msgs)
-        } else {
-            let (_, dest_pubkey, _) = parse_client_address(&dests[0])?;
-            let shared_key = self.get_or_compute_shared_key(&dest_pubkey)?;
-
-            let mut nonce = [0u8; IV_LEN];
-            rng.fill(&mut nonce);
-
-            let encrypted_payload = aes_encrypt(&raw_payload, &shared_key, &nonce);
-
-            Ok(vec![serde_json::to_vec(&PayloadMessage {
-                payload: encrypted_payload,
-                encrypted: true,
-                nonce: nonce.to_vec(),
-                encrypted_key: Vec::new(),
-            })
-            .unwrap()])
-        }
-    }
-
-    fn decrypt_payload(&self, msg: PayloadMessage, src_address: &str) -> Result<Vec<u8>, String> {
-        let encrypted_payload = msg.payload;
-        let (_, src_pubkey, _) = parse_client_address(src_address)?;
-
-        if !msg.encrypted_key.is_empty() {
-            let shared_key = self.get_or_compute_shared_key(&src_pubkey)?;
-            let key = aes_decrypt(&msg.encrypted_key, &shared_key, &msg.nonce[..IV_LEN]);
-            let payload = aes_decrypt(&encrypted_payload, &key, &msg.nonce[IV_LEN..]);
-            Ok(payload)
-        } else {
-            let shared_key = self.get_or_compute_shared_key(&src_pubkey)?;
-            let payload = aes_decrypt(&encrypted_payload, &shared_key, &msg.nonce);
-            Ok(payload)
-        }
-    }
-
-    async fn write_message(&self, data: &[u8]) -> Result<(), String> {
-        todo!();
-        self.reconnect().await
-    }
-
-    async fn process_dests(&self, dests: &[&str]) -> Result<Vec<String>, String> {
-        if dests.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let mut processed_dests = Vec::new();
-
-        for dest in dests {
-            let mut address: Vec<String> = dest.split('.').map(|s| s.to_string()).collect();
-
-            if address.last().unwrap().len() < 2 * PUBLIC_KEY_LEN {
-                let reg = match self.registrant(address.last().unwrap()).await {
-                    Ok(reg) => reg,
-                    Err(_) => continue,
-                };
-
-                if reg.registrant.is_empty() {
-                    continue;
-                }
-
-                *address.last_mut().unwrap() = reg.registrant;
-            }
-
-            let processed_dest = address.join(".");
-
-            processed_dests.push(processed_dest);
-        }
-
-        if processed_dests.is_empty() {
-            Err("invalid destination".into())
-        } else {
-            Ok(processed_dests)
-        }
-    }
-
-    fn create_payloads(
-        &self,
-        dests: &[String],
-        payload: MessagePayload,
-        encrypted: bool,
-    ) -> Result<Vec<Vec<u8>>, String> {
-        if encrypted {
-            Ok(self.encrypt_payload(payload, dests)?)
-        } else {
-            let payload = serde_json::to_vec(&payload).unwrap();
-            let payload = serde_json::to_vec(&PayloadMessage {
-                payload,
-                encrypted: false,
-                nonce: Vec::new(),
-                encrypted_key: Vec::new(),
-            })
-            .unwrap();
-            Ok(vec![payload])
-        }
-    }
-
-    fn create_outbound_message(
-        &self,
-        dests: &[&str],
-        payloads: &[&[u8]],
-        encrypted: bool,
-        max_holding_seconds: u32,
-    ) -> Result<OutboundMessage, String> {
-        let mut outbound_msg = OutboundMessage {
-            dest: String::new(),
-            dests: dests.iter().map(|s| s.to_string()).collect(),
-            payload: Vec::new(),
-            max_holding_seconds,
-            nonce: 0,
-            block_hash: Vec::new(),
-            signatures: Vec::new(),
-            payloads: payloads.iter().map(|v| v.to_vec()).collect(),
-        };
-
-        let node_public_key =
-            hex::decode(&self.node.lock().unwrap().as_ref().unwrap().pub_key).unwrap();
-        let sig_chain_element = SigChainElement {
-            id: Vec::new(),
-            next_pubkey: node_public_key,
-            mining: false,
-            signature: Vec::new(),
-            sig_algo: SigAlgo::Signature,
-            vrf: Vec::new(),
-            proof: Vec::new(),
-        };
-        let sig_chain_element_ser = sig_chain_element.serialize_unsigned();
-
-        let mut rng = thread_rng();
-        let nonce = rng.gen();
-
-        let mut sig_chain = SigChain {
-            nonce,
-            data_size: 0,
-            block_hash: Vec::new(),
-            src_id: self.address_id.to_vec(),
-            src_pubkey: self.public_key().to_vec(),
-            dest_id: Vec::new(),
-            dest_pubkey: Vec::new(),
-            elems: vec![sig_chain_element],
-        };
-
-        if let Some(sig_chain_block_hash) = &self.sig_chain_block_hash {
-            let sig_chain_block_hash = hex::decode(sig_chain_block_hash).unwrap();
-            sig_chain.block_hash = sig_chain_block_hash.clone();
-            outbound_msg.block_hash = sig_chain_block_hash.clone();
-        }
-
-        let mut signatures = Vec::new();
-
-        for (i, dest) in dests.iter().enumerate() {
-            let (dest_id, dest_public_key, _) = parse_client_address(dest)?;
-            sig_chain.dest_id = dest_id.to_vec();
-            sig_chain.dest_pubkey = dest_public_key;
-
-            if payloads.len() > 1 {
-                sig_chain.data_size = payloads[i].len() as u32;
-            } else {
-                sig_chain.data_size = payloads[0].len() as u32;
-            }
-
-            let metadata = sig_chain.serialize_metadata();
-            let mut digest = sha256_hash(&metadata).to_vec();
-            digest.extend_from_slice(&sig_chain_element_ser);
-            let digest = sha256_hash(&digest);
-
-            let signature = ed25519_sign(self.private_key(), &digest);
-            signatures.push(signature.to_vec());
-        }
-
-        outbound_msg.signatures = signatures;
-        outbound_msg.nonce = nonce;
-        Ok(outbound_msg)
-    }
-
-    fn create_client_message(
-        &self,
-        outbound_msg: &OutboundMessage,
-    ) -> Result<ClientMessage, String> {
-        let outbound_msg_data = serde_json::to_vec(outbound_msg).unwrap();
-
-        if outbound_msg.payloads.len() > 1 {
-            let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
-            e.write_all(&outbound_msg_data);
-            let message = e.finish().unwrap();
-
-            Ok(ClientMessage {
-                message_type: ClientMessageType::OutboundMessage,
-                compression_type: CompressionType::CompressionZlib,
-                message,
-            })
-        } else {
-            Ok(ClientMessage {
-                message_type: ClientMessageType::OutboundMessage,
-                compression_type: CompressionType::CompressionNone,
-                message: outbound_msg_data,
-            })
-        }
-    }
-
     async fn send_messages(
         &self,
         dests: &[&str],
@@ -871,80 +1314,22 @@ impl Client {
         max_holding_seconds: u32,
         ws_write_timeout: u64,
     ) -> Result<(), String> {
-        let dests = self.process_dests(dests).await?;
-
-        if dests.is_empty() {
-            return Ok(());
-        }
-
-        let payloads = self.create_payloads(&dests, payload, encrypted)?;
-
-        let mut outbound_msgs = Vec::new();
-        let mut dest_list = Vec::new();
-        let mut payload_list = Vec::new();
-
-        if payloads.len() > 1 {
-            let mut total_size = 0;
-
-            for i in 0..payloads.len() {
-                let size = payloads[i].len() + dests[i].len() + SIGNATURE_LEN;
-
-                if size > MAX_CLIENT_MESSAGE_SIZE {
-                    return Err("message oversize".into());
-                }
-
-                if total_size + size > MAX_CLIENT_MESSAGE_SIZE {
-                    outbound_msgs.push(self.create_outbound_message(
-                        &dest_list,
-                        &payload_list,
-                        encrypted,
-                        max_holding_seconds,
-                    )?);
-                    dest_list.clear();
-                    payload_list.clear();
-                    total_size = 0;
-                }
-
-                dest_list.push(&dests[i]);
-                payload_list.push(&payloads[i]);
-                total_size += size;
-            }
-        } else {
-            let mut size = payloads[0].len();
-
-            for dest in &dests {
-                size += dest.len() + SIGNATURE_LEN;
-            }
-
-            if size > MAX_CLIENT_MESSAGE_SIZE {
-                return Err("message oversize".into());
-            }
-
-            dest_list = dests.iter().map(|s| s.as_str()).collect();
-            payload_list = payloads.iter().map(|p| p.as_slice()).collect();
-        }
-
-        outbound_msgs.push(self.create_outbound_message(
-            &dest_list,
-            &payload_list,
+        send_messages(
+            dests,
+            payload,
             encrypted,
             max_holding_seconds,
-        )?);
-
-        if outbound_msgs.len() > 1 {
-            log::info!(
-                "Client message size is greater than {} bytes, split into {} batches.",
-                MAX_CLIENT_MESSAGE_SIZE,
-                outbound_msgs.len()
-            );
-        }
-
-        for outbound_msg in outbound_msgs {
-            let client_msg = self.create_client_message(&outbound_msg)?;
-            self.write_message(&serde_json::to_vec(&client_msg).unwrap());
-        }
-
-        Ok(())
+            ws_write_timeout,
+            self.public_key(),
+            self.private_key(),
+            &self.address_id,
+            &self.curve_secret_key,
+            &self.node,
+            &self.sig_chain_block_hash,
+            &self.shared_keys,
+            client_config_to_rpc_config(&self.config.lock().unwrap()),
+        )
+        .await
     }
 
     async fn publish(
@@ -1015,7 +1400,7 @@ impl Client {
         self.publish(topic, payload, config).await
     }
 
-    pub async fn send(
+    async fn send(
         &mut self,
         dests: &[&str],
         payload: MessagePayload,
@@ -1034,7 +1419,10 @@ impl Client {
 
         if !config.no_reply {
             let message_id = str::from_utf8(&message_id).unwrap();
-            self.response_channels.insert(message_id.into(), channel());
+            self.response_channels
+                .lock()
+                .unwrap()
+                .insert(message_id.into(), channel());
         }
 
         Ok(())
@@ -1103,7 +1491,8 @@ impl Client {
     }
 
     pub async fn nonce(&self, tx_pool: bool) -> Result<u64, String> {
-        self.nonce_by_address(&self.wallet.lock().unwrap().address(), tx_pool).await
+        self.nonce_by_address(&self.wallet.lock().unwrap().address(), tx_pool)
+            .await
     }
 
     pub async fn nonce_by_address(&self, address: &str, tx_pool: bool) -> Result<u64, String> {
@@ -1122,7 +1511,8 @@ impl Client {
     }
 
     pub async fn balance(&self) -> Result<i64, String> {
-        self.balance_by_address(&self.wallet.lock().unwrap().address()).await
+        self.balance_by_address(&self.wallet.lock().unwrap().address())
+            .await
     }
 
     pub async fn balance_by_address(&self, address: &str) -> Result<i64, String> {

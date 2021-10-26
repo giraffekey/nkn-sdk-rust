@@ -1,7 +1,10 @@
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
+use std::sync::mpsc::Sender;
 
 pub const MESSAGE_ID_SIZE: usize = 8;
+
+pub type Reply = (String, MessagePayload, bool);
 
 #[derive(Debug, Deserialize, Serialize)]
 pub enum MessagePayloadType {
@@ -78,6 +81,11 @@ pub struct PayloadMessage {
     pub encrypted_key: Vec<u8>,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+pub struct TextData {
+    pub text: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct MessageConfig {
     pub unencrypted: bool,
@@ -105,32 +113,40 @@ impl Default for MessageConfig {
 
 #[derive(Debug)]
 pub struct Message {
-    source: String,
-    data: Vec<u8>,
-    type_: u32,
-    encrypted: bool,
-    message_id: Vec<u8>,
-    no_reply: bool,
+    pub src: String,
+    pub data: Vec<u8>,
+    pub r#type: u32,
+    pub encrypted: bool,
+    pub message_id: Vec<u8>,
+    pub no_reply: bool,
+    pub reply_tx: Sender<(String, MessagePayload, bool)>,
 }
 
 impl Message {
     pub fn source(&self) -> &str {
-        &self.source
+        &self.src
     }
 
     pub fn data(&self) -> &[u8] {
         &self.data
     }
 
-    pub fn reply(&self, data: impl Into<Vec<u8>>) {
-        todo!()
+    fn reply(&self, payload: MessagePayload) -> Result<(), String> {
+        if !self.no_reply {
+            self.reply_tx
+                .send((self.src.clone(), payload, self.encrypted))
+                .unwrap();
+        }
+        Ok(())
     }
 
-    pub fn reply_binary(&self, data: &[u8]) {
-        self.reply(data)
+    pub fn reply_binary(&self, data: &[u8]) -> Result<(), String> {
+        let payload = MessagePayload::new_binary(data, &[], &self.message_id, false);
+        self.reply(payload)
     }
 
-    pub fn reply_text(&self, data: &str) {
-        self.reply(data)
+    pub fn reply_text(&self, text: &str) -> Result<(), String> {
+        let payload = MessagePayload::new_text(text, &[], &self.message_id, false);
+        self.reply(payload)
     }
 }
