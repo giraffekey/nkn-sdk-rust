@@ -1,4 +1,5 @@
-use bytes::{BufMut, BytesMut};
+use bytes::{Buf, BufMut, BytesMut};
+use std::str;
 
 pub fn write_var_u64(bytes: &mut Vec<u8>, val: u64) {
     let mut buf = BytesMut::with_capacity(9);
@@ -23,7 +24,17 @@ pub fn write_var_u64(bytes: &mut Vec<u8>, val: u64) {
 }
 
 pub fn read_var_u64(bytes: &mut Vec<u8>) -> u64 {
-    todo!()
+    let size = read_u8(bytes);
+
+    if size == 0xFD {
+        read_u16(bytes) as u64
+    } else if size == 0xFE {
+        read_u32(bytes) as u64
+    } else if size == 0xFF {
+        read_u64(bytes)
+    } else {
+        read_u8(bytes) as u64
+    }
 }
 
 pub fn write_var_bytes(bytes: &mut Vec<u8>, val: &[u8]) {
@@ -32,53 +43,69 @@ pub fn write_var_bytes(bytes: &mut Vec<u8>, val: &[u8]) {
 }
 
 pub fn read_var_bytes(bytes: &mut Vec<u8>) -> Vec<u8> {
-    todo!()
+    let len = read_var_u64(bytes) as usize;
+    let value = bytes.drain(..len).collect();
+    value
 }
 
 pub fn write_var_str(bytes: &mut Vec<u8>, val: &str) {
-    todo!()
+    write_var_u64(bytes, val.len() as u64);
+    bytes.extend_from_slice(val.as_bytes());
 }
 
 pub fn read_var_str(bytes: &mut Vec<u8>) -> String {
-    todo!()
+    let value = read_var_bytes(bytes);
+    str::from_utf8(&value).unwrap().into()
 }
 
 pub fn write_u8(bytes: &mut Vec<u8>, val: u8) {
-    todo!()
+    bytes.push(val);
 }
 
 pub fn read_u8(bytes: &mut Vec<u8>) -> u8 {
-    todo!()
+    bytes.drain(0..1).next().unwrap()
 }
 
 pub fn write_u16(bytes: &mut Vec<u8>, val: u16) {
-    todo!()
+    let mut buf = BytesMut::with_capacity(2);
+    buf.put_u16(val);
+    bytes.extend_from_slice(&buf);
 }
 
 pub fn read_u16(bytes: &mut Vec<u8>) -> u16 {
-    todo!()
+    let mut buf = BytesMut::with_capacity(2);
+    buf.put(bytes.drain(0..2).as_slice());
+    buf.get_u16()
 }
 
 pub fn write_u32(bytes: &mut Vec<u8>, val: u32) {
-    todo!()
+    let mut buf = BytesMut::with_capacity(4);
+    buf.put_u32(val);
+    bytes.extend_from_slice(&buf);
 }
 
 pub fn read_u32(bytes: &mut Vec<u8>) -> u32 {
-    todo!()
+    let mut buf = BytesMut::with_capacity(4);
+    buf.put(bytes.drain(0..4).as_slice());
+    buf.get_u32()
 }
 
 pub fn write_u64(bytes: &mut Vec<u8>, val: u64) {
-    todo!()
+    let mut buf = BytesMut::with_capacity(8);
+    buf.put_u64(val);
+    bytes.extend_from_slice(&buf);
 }
 
 pub fn read_u64(bytes: &mut Vec<u8>) -> u64 {
-    todo!()
+    let mut buf = BytesMut::with_capacity(8);
+    buf.put(bytes.drain(0..8).as_slice());
+    buf.get_u64()
 }
 
 pub fn write_bool(bytes: &mut Vec<u8>, val: bool) {
-    todo!()
+    write_u8(bytes, val as u8);
 }
 
 pub fn read_bool(bytes: &mut Vec<u8>) -> bool {
-    todo!()
+    read_u8(bytes) != 0
 }
